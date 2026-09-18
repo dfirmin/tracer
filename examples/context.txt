@@ -1,0 +1,1 @@
+Target: mart.daily_sales. Run examples/etl/01_stage.sql and then examples/etl/02_target.sql in the same Teradata session. These two files define this example's writers. raw.orders, raw.customers and raw.exchange_rates are externally populated sources; verify no producer exists in the supplied repository. This is a synthetic evaluation fixture, not a production job.

@@ -1,0 +1,44 @@
+services:
+  lineage:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.276}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m
+      - /home/node:rw,nosuid,nodev,size=64m,uid=1000,gid=1000
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set an Anthropic API key in your environment}
+    volumes:
+      - type: bind
+        source: ${TARGET_WORKSPACE:?Set TARGET_WORKSPACE to a clean Git checkout}
+        target: /workspace
+        read_only: true
+      - type: bind
+        source: ${LINEAGE_OUTPUT:?Set LINEAGE_OUTPUT to a writable output directory}
+        target: /output
+    command:
+      - --workspace
+      - /workspace
+      - --repo-url
+      - ${TARGET_REPO_URL:?Set TARGET_REPO_URL}
+      - --schema
+      - ${TARGET_SCHEMA:?Set TARGET_SCHEMA}
+      - --table
+      - ${TARGET_TABLE:?Set TARGET_TABLE}
+      - --out
+      - /output
+      - --concurrency
+      - ${LINEAGE_CONCURRENCY:-4}
+      - --model
+      - ${LINEAGE_MODEL:-sonnet}
+      - --run-budget
+      - ${LINEAGE_RUN_BUDGET:-100}
+      - --call-budget
+      - ${LINEAGE_CALL_BUDGET:-2}
+    mem_limit: 8g
+    pids_limit: 256

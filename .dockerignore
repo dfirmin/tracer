@@ -1,2 +1,7 @@
-out/
-.git/
+.git
+tests
+examples
+__pycache__
+*.pyc
+*.tar.gz
+.env
