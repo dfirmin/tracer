@@ -3,13 +3,14 @@
 #
 #   tracer <schema.table> [--repo <git-url>] [--ref <sha|branch>] [--run <name>]
 #
-# If --repo is omitted, /work/repo must already be mounted (docker -v /path/to/repo:/work/repo:ro).
-# Artifacts land in /work/.lineage/<run>/ (mount it to keep them):
-#   manifest.json       conductor's discovery: build site, ordered column list, object index
-#   findings/<col>.json one tracer result per column (resumable: existing files are skipped)
-#   lineage.csv         the deliverable
-#   gaps.md             columns the tracers could not fully resolve, with reasons
-#   logs/               raw claude -p envelopes per stage
+# If --repo is omitted, $WORK/repo must already be mounted (docker -v /path/to/repo:/work/repo:ro).
+# Artifacts land in $WORK/.lineage/<run>/:
+#   manifest.json        conductor's discovery (validated: every citation is real)
+#   findings/<col>.json  one validated tracer graph per column (resumable; existing files are skipped)
+#   reviews/<col>.json   independent review, when LINEAGE_REVIEW selects the column
+#   lineage.csv          the deliverable (lineage.partial.csv when any column has a gap)
+#   dependencies.csv     join/filter/group/window/order/control inputs, deduplicated per target table
+#   gaps.md, report.json, budget.json, logs/
 set -euo pipefail
 
 TARGET="${1:?usage: tracer <schema.table> [--repo url] [--ref ref] [--run name]}"; shift
@@ -23,61 +24,75 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-BIN=/opt/lineage/bin; SCHEMAS=/opt/lineage/schemas
-cd /work
+export WORK="${WORK:-/work}" LINEAGE_HOME="${LINEAGE_HOME:-/opt/lineage}"
+export LINEAGE_FANOUT="${LINEAGE_FANOUT:-process}" LINEAGE_CONCURRENCY="${LINEAGE_CONCURRENCY:-8}"
+export LINEAGE_CONDUCTOR_MODEL="${LINEAGE_CONDUCTOR_MODEL:-opus}" LINEAGE_TRACER_MODEL="${LINEAGE_TRACER_MODEL:-sonnet}"
+export LINEAGE_REVIEWER_MODEL="${LINEAGE_REVIEWER_MODEL:-$LINEAGE_TRACER_MODEL}" LINEAGE_REVIEW="${LINEAGE_REVIEW:-low}"
+export LINEAGE_MAX_TURNS="${LINEAGE_MAX_TURNS:-60}" LINEAGE_ATTEMPTS="${LINEAGE_ATTEMPTS:-2}" LINEAGE_TIMEOUT="${LINEAGE_TIMEOUT:-900}"
+export LINEAGE_CALL_BUDGET="${LINEAGE_CALL_BUDGET:-2}" LINEAGE_RUN_BUDGET="${LINEAGE_RUN_BUDGET:-100}"
+SCHEMAS="$LINEAGE_HOME/schemas"
+cd "$WORK"
+source "$LINEAGE_HOME/bin/lib/session.sh"
 
 # ---- 0. workspace ---------------------------------------------------------------------------
 if [[ -n "$REPO_URL" ]]; then
   rm -rf repo && git clone --quiet ${REF:+--branch "$REF"} --depth 1 "$REPO_URL" repo
 fi
-[[ -d repo/.git || -n "$(ls -A repo 2>/dev/null)" ]] || { echo "no repo at /work/repo" >&2; exit 2; }
-
+[[ -n "$(ls -A repo 2>/dev/null)" ]] || { echo "no repo at $WORK/repo" >&2; exit 2; }
+if [[ -n "$(git -C repo status --porcelain 2>/dev/null)" ]]; then
+  echo "repo has uncommitted changes; citations would not resolve to the commit — commit or stash first" >&2; exit 2
+fi
 SHA=$(git -C repo rev-parse HEAD 2>/dev/null || echo "unknown")
 REMOTE=$(git -C repo remote get-url origin 2>/dev/null || echo "$REPO_URL")
-# git@github.com:org/repo.git  →  https://github.com/org/repo
 WEB=$(echo "$REMOTE" | sed -E 's#^git@([^:]+):#https://\1/#; s#\.git$##')
-CODE_URL_BASE="${LINEAGE_CODE_URL_BASE:-$WEB/blob/$SHA}"
+export CODE_URL_BASE="${LINEAGE_CODE_URL_BASE:-$WEB/blob/$SHA}"
 
 RUN="${RUN:-$(echo "$TARGET" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_')-$(date -u +%Y%m%dT%H%M%SZ)}"
-RUN_DIR=".lineage/$RUN"; mkdir -p "$RUN_DIR/findings" "$RUN_DIR/logs"
-cat > "$RUN_DIR/run.json" <<JSON
-{"target":"$TARGET","repo":"$REMOTE","sha":"$SHA","code_url_base":"$CODE_URL_BASE","fanout":"$LINEAGE_FANOUT","started":"$(date -u +%FT%TZ)"}
+export RUN_DIR=".lineage/$RUN" TARGET
+mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reviews" "$RUN_DIR/logs"
+if [[ -f "$RUN_DIR/run.json" ]] && [[ "$(jq -r .sha "$RUN_DIR/run.json")" != "$SHA" ]]; then
+  echo "run $RUN was started at $(jq -r .sha "$RUN_DIR/run.json"), repo is now at $SHA — use a new --run" >&2; exit 2
+fi
+[[ -f "$RUN_DIR/run.json" ]] || cat > "$RUN_DIR/run.json" <<JSON
+{"target":"$TARGET","repo":"$REMOTE","sha":"$SHA","code_url_base":"$CODE_URL_BASE","fanout":"$LINEAGE_FANOUT","review":"$LINEAGE_REVIEW","started":"$(date -u +%FT%TZ)"}
 JSON
-echo "run: $RUN_DIR  target: $TARGET  sha: $SHA  fanout: $LINEAGE_FANOUT"
+echo "run: $RUN_DIR  target: $TARGET  sha: $SHA  fanout: $LINEAGE_FANOUT  review: $LINEAGE_REVIEW"
 
 # ---- 1. discover (conductor) ----------------------------------------------------------------
 if [[ ! -s "$RUN_DIR/manifest.json" ]]; then
-  echo "[1/3] discover"
+  echo "[1/4] discover"
   PROMPT="Target: $TARGET
 Run directory: $RUN_DIR
-Code URL base: $CODE_URL_BASE
 Produce the manifest for this target."
   if [[ "$LINEAGE_FANOUT" == "subagent" ]]; then
     PROMPT+="
 Fan-out mode: subagent. After the manifest is written, dispatch column-tracer for every column and write each result to $RUN_DIR/findings/<column>.json before you finish."
   fi
-  claude -p "$PROMPT" \
-    --agent conductor --model "$LINEAGE_CONDUCTOR_MODEL" \
-    --permission-mode dontAsk --max-turns "$((LINEAGE_MAX_TURNS * 3))" \
-    --output-format json --json-schema "$(cat "$SCHEMAS/manifest.schema.json")" \
-    > "$RUN_DIR/logs/discover.json"
-  jq -e '.structured_output' "$RUN_DIR/logs/discover.json" > "$RUN_DIR/manifest.json" \
-    || { echo "conductor produced no manifest; see $RUN_DIR/logs/discover.json" >&2; exit 1; }
+  LINEAGE_MAX_TURNS=$((LINEAGE_MAX_TURNS * 3)) LINEAGE_CALL_BUDGET=$(python3 -c "print($LINEAGE_CALL_BUDGET*4)") \
+    run_session discover conductor "$LINEAGE_CONDUCTOR_MODEL" "$SCHEMAS/manifest.schema.json" manifest "" "$PROMPT" "$RUN_DIR/manifest.json" \
+    || { echo "conductor produced no valid manifest; see $RUN_DIR/logs/discover.*" >&2; exit 1; }
 fi
 N=$(jq '.columns | length' "$RUN_DIR/manifest.json")
-echo "manifest: $N columns, build site(s): $(jq -r '[.build_sites[].path] | join(", ")' "$RUN_DIR/manifest.json")"
+echo "manifest: $N columns, enumeration_complete=$(jq -r .enumeration_complete "$RUN_DIR/manifest.json"), build site(s): $(jq -r '[.build_sites[].evidence[0].path] | unique | join(", ")' "$RUN_DIR/manifest.json")"
 
 # ---- 2. trace (one tracer per column) -------------------------------------------------------
 if [[ "$LINEAGE_FANOUT" == "process" ]]; then
-  echo "[2/3] trace ($LINEAGE_CONCURRENCY parallel)"
-  export RUN_DIR TARGET CODE_URL_BASE SCHEMAS
-  jq -r '.columns[].name' "$RUN_DIR/manifest.json" \
-    | xargs -P "$LINEAGE_CONCURRENCY" -I{} "$BIN/trace-one" "{}"
+  echo "[2/4] trace ($LINEAGE_CONCURRENCY parallel)"
+  jq -r '.columns[].name' "$RUN_DIR/manifest.json" | xargs -P "$LINEAGE_CONCURRENCY" -I{} "$LINEAGE_HOME/bin/trace-one" "{}"
 else
-  echo "[2/3] trace: done in-session by conductor"
+  echo "[2/4] trace: done in-session by conductor"
 fi
 
-# ---- 3. assemble ----------------------------------------------------------------------------
-echo "[3/3] assemble"
-python3 "$BIN/assemble.py" "$RUN_DIR"
-echo "done → $RUN_DIR/lineage.csv"
+# ---- 3. review (optional, sampled) ----------------------------------------------------------
+if [[ "$LINEAGE_REVIEW" != "none" ]]; then
+  echo "[3/4] review ($LINEAGE_REVIEW)"
+  jq -r '.columns[].name' "$RUN_DIR/manifest.json" | xargs -P "$LINEAGE_CONCURRENCY" -I{} "$LINEAGE_HOME/bin/review-one" "{}"
+else
+  echo "[3/4] review: skipped"
+fi
+
+# ---- 4. assemble ----------------------------------------------------------------------------
+echo "[4/4] assemble"
+python3 "$LINEAGE_HOME/bin/assemble.py" "$RUN_DIR"
+echo "spend: \$$("$LINEAGE_HOME/bin/budget" total)  → $RUN_DIR/$(jq -r .mapping_file "$RUN_DIR/report.json")"
+jq -e .complete "$RUN_DIR/report.json" >/dev/null || exit 3

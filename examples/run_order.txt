@@ -1,0 +1,1 @@
+Teradata session: run 01_stage.sql then 02_target.sql. raw.* tables are populated outside this repo.

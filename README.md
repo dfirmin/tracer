@@ -1,79 +1,88 @@
 # tracer
 
-Produces a source-to-target mapping CSV for one table/view by **reading** the ETL repo that builds it. No SQL parser, no per-dialect adapters: a conductor discovers how the target is built, one tracer per column walks the derivation hop by hop to its terminal sources, and a small script joins the findings into a CSV with a code citation on every row.
+Produces a source-to-target mapping CSV for one table/view by **reading** the ETL repo that builds it. No SQL parser, no per-dialect adapters: a conductor discovers how the target is built, one tracer per column walks the derivation hop by hop to its terminal sources as a cited graph, the harness checks every citation against the file, an optional reviewer replays the trace, and a small script joins the findings into a CSV with a code link on every row.
 
 Works against any workspace: the harness (`CLAUDE.md`, agents, skills) lives at the container's project root and the target repo is mounted beneath it at `repo/`, so nothing is written into the repo and no repo-specific setup is needed.
 
 ## Run
 
 ```bash
-docker build -t tracer .
-
-# repo already on disk
-docker run --rm \
-  -e ANTHROPIC_API_KEY \
-  -v /path/to/etl-repo:/work/repo:ro \
-  -v "$PWD/out":/work/.lineage \
-  tracer edw.claim_fact
-
-# or clone inside the container
-docker run --rm -e ANTHROPIC_API_KEY -v "$PWD/out":/work/.lineage \
-  tracer edw.claim_fact --repo git@github.com:org/etl.git --ref main
+export TARGET_WORKSPACE=/path/to/etl-repo   # clean, committed checkout
+export LINEAGE_OUTPUT=$PWD/out
+export ANTHROPIC_API_KEY=...                 # or ANTHROPIC_BASE_URL for an internal gateway
+docker compose build
+docker compose run --rm tracer edw.claim_fact
 ```
 
-Output: `out/<run>/lineage.csv`, `gaps.md`, `manifest.json`, `findings/*.json`, `logs/`.
+Or without compose: `docker run --rm -e ANTHROPIC_API_KEY -v $TARGET_WORKSPACE:/work/repo:ro -v $LINEAGE_OUTPUT:/work/.lineage tracer edw.claim_fact [--repo git@... --ref main] [--run name]`.
 
-Through an internal gateway instead of the public API: set `ANTHROPIC_BASE_URL` (and whatever auth header/env the gateway needs) on the container; Claude Code reads them. For Bedrock, pass the usual `CLAUDE_CODE_USE_BEDROCK=1` and AWS credentials.
+Output in `out/<run>/`:
+
+| File | Meaning |
+|---|---|
+| `lineage.csv` | the deliverable: one row per terminal **value** source of each target column. Named `lineage.partial.csv` when any column has a gap |
+| `dependencies.csv` | join keys, filters, group/window/order columns and control flags, deduplicated per target table — the impact-analysis view |
+| `gaps.md` | columns that did not fully resolve, with the tracer's reasons |
+| `report.json` | per-column status, confidence, review outcome, spend |
+| `manifest.json`, `findings/*.json`, `reviews/*.json` | the agents' validated outputs; `findings/` are full graphs with scope and evidence |
+| `budget.json`, `logs/` | spend ledger; raw session envelopes, stderr, and `*.problems` (what the validator rejected) |
+
+Exit codes: `0` complete, `3` partial (a column has a gap or the run budget stopped dispatch), `1` discovery failed, `2` bad input.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `LINEAGE_FANOUT` | `process` | `process`: one `claude -p` session per column, run by the harness with `xargs -P`. `subagent`: the conductor dispatches `column-tracer` subagents inside its own session |
-| `LINEAGE_CONCURRENCY` | `8` | parallel tracer sessions in `process` mode |
-| `LINEAGE_CONDUCTOR_MODEL` / `LINEAGE_TRACER_MODEL` | `opus` / `sonnet` | model aliases or full IDs |
-| `LINEAGE_MAX_TURNS` | `60` | per tracer; conductor gets 3× |
-| `LINEAGE_CODE_URL_BASE` | derived from `origin` + HEAD | override for GHES or non-GitHub hosts (`https://ghe.corp/org/repo/blob/<sha>`) |
+| `LINEAGE_FANOUT` | `process` | `process`: one `claude -p` per column via `xargs -P`. `subagent`: the conductor dispatches `column-tracer` subagents in its own session |
+| `LINEAGE_CONCURRENCY` | `8` | parallel sessions |
+| `LINEAGE_CONDUCTOR_MODEL` / `LINEAGE_TRACER_MODEL` / `LINEAGE_REVIEWER_MODEL` | `opus` / `sonnet` / tracer's | aliases or full IDs |
+| `LINEAGE_REVIEW` | `low` | `none`; `low` = review findings with confidence below high or any unresolved; `all` |
+| `LINEAGE_CALL_BUDGET` / `LINEAGE_RUN_BUDGET` | `2` / `100` | USD per session (`--max-budget-usd`; conductor gets 4×) and a run ceiling enforced by a flock'd ledger |
+| `LINEAGE_ATTEMPTS` / `LINEAGE_MAX_TURNS` / `LINEAGE_TIMEOUT` | `2` / `60` / `900` | per session |
+| `LINEAGE_CODE_URL_BASE` | from `origin` + HEAD | override for GHES or non-GitHub hosts |
 
-Re-running with `--run <same name>` skips the manifest and any column that already has a finding, so a failed or budget-capped run resumes where it stopped.
+Re-running with `--run <same name>` skips the manifest, every column with a finding, and every finished review. It refuses if the repo's HEAD moved.
 
 ## How it works
 
 ```
 bin/tracer
- ├─ 0 workspace   clone or use mounted repo; record sha + code URL base           → run.json
- ├─ 1 discover    claude -p --agent conductor  (skills: etl-discovery, contract)  → manifest.json
- ├─ 2 trace       N × claude -p --agent column-tracer (skills: tracing, contract) → findings/<col>.json
- └─ 3 assemble    assemble.py joins manifest + findings                           → lineage.csv, gaps.md
+ ├─ 0 workspace  clone or use mounted repo; require clean tree; record sha            → run.json
+ ├─ 1 discover   claude -p --agent conductor   ──▶ check manifest                     → manifest.json
+ ├─ 2 trace      N × claude -p --agent column-tracer ──▶ check finding (retry w/ feedback) → findings/<col>.json
+ ├─ 3 review     claude -p --agent lineage-reviewer for selected columns; one repair if rejected → reviews/<col>.json
+ └─ 4 assemble   assemble.py                                                           → lineage.csv, dependencies.csv, gaps.md, report.json
 ```
 
-Stages talk only through files. Each `claude -p` call uses `--json-schema` so the agent's final answer is validated structured output, not free text that a script has to parse.
+Stages talk only through files. Every session uses `--json-schema` so the agent's final answer is validated structured output. `bin/check` then re-opens each cited file and rejects the answer if the quoted text is not at the cited lines, or if the graph is malformed (cycle, orphan node, terminal with upstream edges, a value source with no mapping, a join/filter column mapped as a source). Rejections go back to the agent as feedback on the retry.
 
 ```
 harness/                    copied to /work — the Claude Code project the agents run in
-  CLAUDE.md                 principles + shared vocabulary (hop, terminal source, dead end)
+  CLAUDE.md                 principles + shared vocabulary (node, value edge, dependency edge, terminal source, dead end)
   settings.json             read-only permission allowlist, subagent limits
   agents/conductor.md       discovery; runs as the main session via --agent
-  agents/column-tracer.md   one column → finding; main session (process) or subagent (subagent mode)
-  skills/etl-discovery      how to find build sites across dialects/notebooks/templating
-  skills/lineage-tracing    the hop discipline, fan-in rules, mapping composition, confidence rubric
+  agents/column-tracer.md   one column → cited graph; main session (process) or subagent (subagent mode)
+  agents/lineage-reviewer.md replays a finding against the source, accepts or rejects with cited issues
+  skills/etl-discovery      finding build sites across dialects/notebooks/templating
+  skills/lineage-tracing    the hop discipline: value vs dependency, scope, boundaries, fan-in, mapping composition, confidence
   skills/lineage-contract   what each output field means
-schemas/                    manifest + finding JSON Schema (the --json-schema contract)
-bin/                        tracer (driver), trace-one (per-column session), assemble.py (JSON→CSV)
+schemas/                    manifest, finding, review JSON Schema (the --json-schema contracts)
+bin/                        tracer, trace-one, review-one, lib/session.sh, check, budget, assemble.py
+tests/                      fake claude + 16 tests   (python3 -m unittest discover -s tests -v)
+examples/etl/               two-file Teradata fixture (mart.daily_sales) used by the tests and the first live smoke test
+docs/evaluation.md          the three gates before trusting output
 ```
 
 ## Design decisions
 
-**Process fan-out is the default, subagent fan-out is one flag away.** Both use the same `column-tracer.md` — Claude Code runs an agent file either as the main session (`--agent`) or as a subagent (`Agent` tool). Process mode is the default because each column then gets its own session, its own budget, its own log, and its own result file on disk: 200 columns don't share a context window or a concurrency cap, a crash loses one column, and a re-run is a `skip`. In headless mode the conductor also has to be trusted to block on every background subagent before it ends its turn; a file per column makes the completion criterion checkable from outside instead.
+**The CSV is value lineage.** A row means "this source column's value contributes to this target column". Join keys, filters, group/window/order columns and control flags decide *which rows* arrive, not the value — they are recorded as typed edges in the finding graph and exported to `dependencies.csv`, deduplicated per table, never as rows in `lineage.csv`. Row-selection context still appears in the Mapping Rule text (`… where fx.is_current = 1`) so a reader sees it where it matters. See [`docs/evaluation.md`](docs/evaluation.md) for how this is checked.
 
-**No `--bare`.** `--bare` skips `.claude/` discovery, which is where the agents and skills live. The harness instead sets `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1` so only `conductor` and `column-tracer` exist, and locks permissions with `dontAsk` plus an allowlist (read-only on `repo/`, write only under `.lineage/`).
+**Verify structurally, review selectively.** Citation entailment and graph invariants are free (no model call) and catch the most likely failure — a plausible citation the agent never read. An independent reviewer session catches semantic errors but doubles cost and shares the tracer's blind spots, so it defaults to `low`: only findings that already admit doubt. Change the default once Gate 2 of the evaluation says what it catches.
 
-**Skills carry the discipline; agents carry the steps.** Following the pattern in mattpocock/skills: each agent file is a short ordered sequence with a completion criterion per step; the reusable knowledge (how to search a mixed-shape repo, how to take a hop, what a field means) lives in model-invoked skills that are preloaded into the agent with the `skills:` frontmatter field. To change how tracing behaves, edit the skill; to change the pipeline, edit the agent.
+**Process fan-out by default, subagents one flag away.** Same `column-tracer.md` either way — Claude Code runs an agent file as the main session (`--agent`) or as a subagent (`Agent` tool). Process mode gives each column its own session, budget, log and result file: 200 columns don't share a context window or a concurrency cap, a crash loses one column, and a re-run is a skip.
 
-**Gaps are output, not failures.** A dead end (runtime-computed name, missing `%run` target, UDF body not in the repo) becomes a row with `Source Type: unknown`, a `low` confidence, and a reason in `gaps.md`. The CSV is trustworthy where it is confident and honest where it is not.
+**Scope, not names.** A temp table written twice is two nodes with different `scope`. The CSV can't show that; the finding JSON can, and that is the artifact a graph or catalog consumer should read.
 
-**The only deterministic code never sees SQL.** `assemble.py` reshapes JSON the agents produced. Adding a new repo shape means the skill gets a paragraph, not the pipeline a parser.
+**Harness-native, no `--bare`.** `--bare` skips `.claude/` discovery, which is where the agents and skills live. Instead `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1` leaves only our three agents, and `settings.json` locks tools to read-only on `repo/` plus `rg`/`git log`/`git blame`.
 
-## Next steps worth doing
+**Skills carry the discipline; agents carry the steps.** Following mattpocock/skills: each agent file is a short ordered sequence with a completion criterion per step; the reusable knowledge lives in model-invoked skills preloaded with the `skills:` frontmatter field. To change how tracing behaves, edit the skill; to change the pipeline, edit the agent.
 
-- **Verifier stage**: a third agent that samples rows from `lineage.csv`, opens each Code URL's file at the cited lines, and confirms the expression supports the claim. Cheap insurance before the CSV leaves the run.
-- **Fixture repo + `scripts/test.sh`**: a tiny mixed-shape repo (one BTEQ script, one SQL notebook, one PySpark file with an f-string table name, one YAML config) with a known-good CSV to diff against.
-- **Per-repo `LINEAGE.md`**: if a repo has conventions no skill can guess (naming schemes, which schema is "raw"), mount it at `/work/repo-notes.md` and point `CLAUDE.md` at it.
+**Gaps are output.** A dead end becomes a `low` confidence finding with an `unresolved` line, a row with `Source Type: unresolved`, and an entry in `gaps.md`; the file is renamed `.partial` so nobody ships it as complete. The only deterministic code, `assemble.py` and `check`, never reads SQL.

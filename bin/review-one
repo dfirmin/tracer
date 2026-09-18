@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# review-one <column> — independent review of a finding; one bounded repair if rejected.
+# LINEAGE_REVIEW: none | low (review findings with confidence low/medium or any unresolved) | all
+set -uo pipefail
+source "$LINEAGE_HOME/bin/lib/session.sh"
+COL="$1"; SAFE=$(echo "$COL" | tr -c 'A-Za-z0-9_\n' '_')
+FINDING="$RUN_DIR/findings/$SAFE.json"; REVIEW="$RUN_DIR/reviews/$SAFE.json"
+[[ -s "$FINDING" ]] || exit 0
+[[ -s "$REVIEW" ]] && { echo "  skip $COL (reviewed)"; exit 0; }
+jq -e '.failed' "$FINDING" >/dev/null 2>&1 && exit 0
+if [[ "$LINEAGE_REVIEW" == "low" ]] && jq -e '.confidence == "high" and (.unresolved | length == 0)' "$FINDING" >/dev/null; then
+  exit 0
+fi
+
+PROMPT="Target: $TARGET
+Column: $COL
+Manifest: $RUN_DIR/manifest.json
+Finding to review: $FINDING
+Verify the finding against the source and return the review."
+PROMPT_REVIEW="$PROMPT"
+run_session "review-$SAFE" lineage-reviewer "$LINEAGE_REVIEWER_MODEL" "$LINEAGE_HOME/schemas/review.schema.json" review "$COL" "$PROMPT" "$REVIEW" || exit 0
+if jq -e .accepted "$REVIEW" >/dev/null; then
+  echo "  ok   $COL review accepted"
+else
+  echo "  fix  $COL review rejected: $(jq -r '.issues | length' "$REVIEW") issue(s) — repairing"
+  mv "$FINDING" "$RUN_DIR/findings/$SAFE.rejected.json"
+  PROMPT="Target: $TARGET
+Column: $COL
+Manifest: $RUN_DIR/manifest.json
+Your earlier finding is at $RUN_DIR/findings/$SAFE.rejected.json. An independent reviewer rejected it with these issues:
+$(jq -r '.issues[] | "- " + .' "$REVIEW")
+Re-read the cited source, fix every issue, and return the corrected finding."
+  if run_session "repair-$SAFE" column-tracer "$LINEAGE_TRACER_MODEL" "$LINEAGE_HOME/schemas/finding.schema.json" finding "$COL" "$PROMPT" "$FINDING"; then
+    mv "$REVIEW" "$RUN_DIR/reviews/$SAFE.first.json"
+    run_session "rereview-$SAFE" lineage-reviewer "$LINEAGE_REVIEWER_MODEL" "$LINEAGE_HOME/schemas/review.schema.json" review "$COL" "$PROMPT_REVIEW" "$REVIEW" 2>/dev/null || true
+  else
+    mv "$RUN_DIR/findings/$SAFE.rejected.json" "$FINDING"
+  fi
+fi
+# stamp the review onto the finding so assemble can report it
+if [[ -s "$REVIEW" ]]; then
+  jq --slurpfile r "$REVIEW" '.review = $r[0]' "$FINDING" > "$FINDING.tmp" && mv "$FINDING.tmp" "$FINDING"
+fi
+exit 0

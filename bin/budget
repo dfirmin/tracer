@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""budget — a flock'd spend ledger shared by parallel sessions.
+
+    budget reserve <label>          reserve LINEAGE_CALL_BUDGET; exit 3 if the run ceiling would be exceeded
+    budget settle  <label> <usd>    replace the reservation with the reported cost
+    budget total                    print committed spend
+
+Ledger: $RUN_DIR/budget.json. Reservations survive crashes so a restarted run
+still counts sessions whose cost was never reported.
+"""
+import fcntl, json, os, sys
+from pathlib import Path
+
+path = Path(os.environ["RUN_DIR"]) / "budget.json"
+cap = float(os.environ.get("LINEAGE_CALL_BUDGET", "2"))
+ceiling = float(os.environ.get("LINEAGE_RUN_BUDGET", "100"))
+
+
+def with_ledger(fn):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        entries = json.loads(path.read_text()) if path.exists() else []
+        rc = fn(entries)
+        path.write_text(json.dumps(entries, indent=1))
+        return rc
+
+
+cmd, args = sys.argv[1], sys.argv[2:]
+if cmd == "reserve":
+    def f(entries):
+        committed = sum(e["usd"] for e in entries)
+        if committed + cap > ceiling + 1e-9:
+            print(f"run budget: {committed:.2f} + {cap:.2f} reservation exceeds ceiling {ceiling:.2f}", file=sys.stderr)
+            return 3
+        entries.append({"label": args[0], "usd": cap, "state": "reserved"})
+        return 0
+    sys.exit(with_ledger(f))
+elif cmd == "settle":
+    def f(entries):
+        for e in reversed(entries):
+            if e["label"] == args[0] and e["state"] == "reserved":
+                try:
+                    e["usd"], e["state"] = max(0.0, float(args[1])), "reported"
+                except ValueError:
+                    e["state"] = "unknown"
+                break
+        return 0
+    sys.exit(with_ledger(f))
+elif cmd == "total":
+    sys.exit(with_ledger(lambda entries: print(f"{sum(e['usd'] for e in entries):.4f}") or 0))

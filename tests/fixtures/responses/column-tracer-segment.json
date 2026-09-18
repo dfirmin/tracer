@@ -1,0 +1,126 @@
+{
+ "target_column": "segment",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "mart",
+   "table": "daily_sales",
+   "column": "segment",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "COALESCE(c.segment, 'UNKNOWN') AS segment"
+    }
+   ]
+  },
+  {
+   "id": "c_seg",
+   "schema": "raw",
+   "table": "customers",
+   "column": "segment",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "c.segment"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "lit",
+   "schema": "",
+   "table": "",
+   "column": "'UNKNOWN'",
+   "scope": "",
+   "source_type": "literal",
+   "terminal": "literal",
+   "boundary_reason": "constant default",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "'UNKNOWN'"
+    }
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "c_seg",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "COALESCE(c.segment, 'UNKNOWN')",
+   "business_rule": "Customer segment.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "c.segment"
+    }
+   ]
+  },
+  {
+   "source_id": "lit",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "COALESCE(c.segment, 'UNKNOWN')",
+   "business_rule": "Default when the customer has no segment.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "'UNKNOWN'"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "c_seg",
+   "mapping_rule": "COALESCE(c.segment, 'UNKNOWN')",
+   "mapping_business_rule": "Customer segment from the customers table.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "c.segment"
+    }
+   ]
+  },
+  {
+   "source_id": "lit",
+   "mapping_rule": "COALESCE(c.segment, 'UNKNOWN')",
+   "mapping_business_rule": "The text UNKNOWN when the customer has no segment.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "'UNKNOWN'"
+    }
+   ]
+  }
+ ]
+}

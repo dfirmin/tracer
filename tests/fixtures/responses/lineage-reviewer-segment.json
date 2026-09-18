@@ -1,0 +1,13 @@
+{
+ "target_column": "segment",
+ "accepted": true,
+ "issues": [],
+ "evidence": [
+  {
+   "path": "repo/examples/etl/02_target.sql",
+   "start_line": 1,
+   "end_line": 9,
+   "quote": "mart.daily_sales"
+  }
+ ]
+}

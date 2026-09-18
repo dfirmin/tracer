@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""check — validate an agent output before the pipeline accepts it.
+
+    check manifest <file>            --work <dir>
+    check finding  <file> --column C --work <dir>
+    check review   <file> --column C --work <dir>
+
+Exit 0 when the file passes; exit 2 with one problem per line on stdout otherwise
+(trace-one feeds those lines back to the agent on retry). Nothing here interprets SQL:
+it checks that citations are real, that the graph is well-formed, and that the value
+mappings cover exactly the terminal value sources.
+"""
+import argparse, json, sys
+from pathlib import Path
+
+VALUE_KINDS = {"value"}
+
+
+class Problems(list):
+    def add(self, msg):
+        self.append(msg)
+
+
+# ---- evidence -------------------------------------------------------------------------------
+def check_evidence(items, work, where, p):
+    if not items:
+        p.add(f"{where}: no evidence")
+        return
+    for i, e in enumerate(items):
+        tag = f"{where}.evidence[{i}]"
+        path = Path(e.get("path", ""))
+        if not str(path).startswith("repo/") or ".." in path.parts:
+            p.add(f"{tag}: path must be repo-relative and start with repo/ (got {path})")
+            continue
+        f = work / path
+        if not f.is_file():
+            p.add(f"{tag}: file not found: {path}")
+            continue
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as exc:
+            p.add(f"{tag}: cannot read {path}: {exc}")
+            continue
+        a, b = e.get("start_line", 0), e.get("end_line", 0)
+        if not (1 <= a <= b <= len(lines)):
+            p.add(f"{tag}: line range {a}-{b} outside {path} ({len(lines)} lines)")
+            continue
+        quote = (e.get("quote") or "").strip()
+        window = "\n".join(lines[a - 1:b])
+        if not quote:
+            p.add(f"{tag}: empty quote")
+        elif quote not in window and " ".join(quote.split()) not in " ".join(window.split()):
+            p.add(f"{tag}: quote does not occur at {path}:{a}-{b}")
+
+
+# ---- manifest -------------------------------------------------------------------------------
+def check_manifest(m, work, p):
+    for k in ("target", "build_sites", "columns", "object_index", "enumeration_complete"):
+        if k not in m:
+            p.add(f"manifest: missing '{k}'")
+    if p:
+        return
+    if not m["build_sites"]:
+        p.add("manifest.build_sites: empty")
+    for i, s in enumerate(m["build_sites"]):
+        check_evidence(s.get("evidence"), work, f"build_sites[{i}]", p)
+    names = [c.get("name", "") for c in m["columns"]]
+    if not names:
+        p.add("manifest.columns: empty")
+    if len(set(names)) != len(names):
+        p.add("manifest.columns: duplicate names")
+    if [c.get("ordinal") for c in m["columns"]] != list(range(1, len(names) + 1)):
+        p.add("manifest.columns: ordinals must run 1..N in target order")
+    for c in m["columns"]:
+        check_evidence(c.get("evidence"), work, f"column {c.get('name')}", p)
+    for o in m["object_index"]:
+        check_evidence(o.get("evidence"), work, f"object {o.get('name')}", p)
+
+
+# ---- finding --------------------------------------------------------------------------------
+def check_finding(f, work, column, p):
+    for k in ("target_column", "root_id", "nodes", "edges", "mappings", "confidence", "unresolved"):
+        if k not in f:
+            p.add(f"finding: missing '{k}'")
+    if p:
+        return
+    if f["target_column"] != column:
+        p.add(f"finding.target_column is {f['target_column']!r}, expected {column!r}")
+    nodes = {}
+    for n in f["nodes"]:
+        nid = n.get("id", "")
+        if not nid or nid in nodes:
+            p.add(f"node id {nid!r}: empty or duplicate")
+        nodes[nid] = n
+        check_evidence(n.get("evidence"), work, f"node {nid}", p)
+        if n.get("terminal") != "expanded" and not (n.get("boundary_reason") or "").strip():
+            p.add(f"node {nid}: terminal {n.get('terminal')} needs a boundary_reason")
+        if n.get("terminal") == "repo_boundary":
+            if n.get("source_type") not in ("physical", "external", "view", "file"):
+                p.add(f"node {nid}: repo_boundary must be physical/external/view/file, got {n.get('source_type')}")
+            if not n.get("search_notes"):
+                p.add(f"node {nid}: repo_boundary needs search_notes showing no producer was found")
+        if n.get("terminal") in ("literal", "runtime") and n.get("source_type") != n.get("terminal"):
+            p.add(f"node {nid}: terminal {n['terminal']} needs source_type {n['terminal']}")
+        if n.get("source_type") == "unresolved" and n.get("terminal") != "unresolved":
+            p.add(f"node {nid}: source_type unresolved must be terminal unresolved")
+    root = nodes.get(f["root_id"])
+    if not root:
+        p.add(f"root_id {f['root_id']!r} is not a node")
+        return
+    if root.get("column") != column:
+        p.add(f"root node column is {root.get('column')!r}, expected {column!r}")
+
+    incoming = {nid: [] for nid in nodes}          # target -> [(source, kind)]
+    for i, e in enumerate(f["edges"]):
+        s, t = e.get("source_id"), e.get("target_id")
+        if s not in nodes or t not in nodes:
+            p.add(f"edge[{i}]: references unknown node ({s} -> {t})")
+            continue
+        if not (e.get("expression") or "").strip() or not (e.get("business_rule") or "").strip():
+            p.add(f"edge[{i}] {s}->{t}: expression and business_rule required")
+        incoming[t].append((s, e.get("dependency_kind")))
+        check_evidence(e.get("evidence"), work, f"edge[{i}] {s}->{t}", p)
+
+    # connectivity + acyclicity from the root
+    seen, active = set(), set()
+
+    def visit(nid):
+        if nid in active:
+            p.add(f"cycle through node {nid}; end the previous state as its own terminal node")
+            return
+        if nid in seen:
+            return
+        active.add(nid)
+        for s, _ in incoming[nid]:
+            visit(s)
+        active.discard(nid)
+        seen.add(nid)
+
+    visit(f["root_id"])
+    for nid in nodes:
+        if nid not in seen:
+            p.add(f"node {nid}: not connected to the root")
+
+    for nid, n in nodes.items():
+        if n.get("terminal") == "expanded" and not incoming[nid]:
+            p.add(f"node {nid}: expanded but has no upstream edges")
+        if n.get("terminal") != "expanded" and incoming[nid]:
+            p.add(f"node {nid}: terminal but has upstream edges")
+
+    # value-reachable terminals: walk from root following only value edges
+    value_terminals, stack, walked = set(), [f["root_id"]], set()
+    while stack:
+        nid = stack.pop()
+        if nid in walked:
+            continue
+        walked.add(nid)
+        n = nodes[nid]
+        if n.get("terminal") != "expanded":
+            value_terminals.add(nid)
+        for s, kind in incoming[nid]:
+            if kind in VALUE_KINDS:
+                stack.append(s)
+    mapped = set()
+    for i, m in enumerate(f["mappings"]):
+        sid = m.get("source_id")
+        if sid not in nodes:
+            p.add(f"mapping[{i}]: unknown source_id {sid}")
+            continue
+        if nodes[sid].get("terminal") == "expanded":
+            p.add(f"mapping[{i}]: {sid} is not a terminal node")
+        if sid not in value_terminals:
+            p.add(f"mapping[{i}]: {sid} reaches the target only through join/filter/group/window edges — a dependency, not a source; remove it from mappings")
+        if not (m.get("mapping_rule") or "").strip() or not (m.get("mapping_business_rule") or "").strip():
+            p.add(f"mapping[{i}] {sid}: mapping_rule and mapping_business_rule required")
+        mapped.add(sid)
+        check_evidence(m.get("evidence"), work, f"mapping[{i}] {sid}", p)
+    for sid in value_terminals - mapped:
+        p.add(f"terminal value source {sid} ({nodes[sid].get('table')}.{nodes[sid].get('column')}) has no mapping")
+    has_gap = bool(f["unresolved"]) or any(n.get("terminal") == "unresolved" for n in nodes.values())
+    if has_gap and f["confidence"] == "high":
+        p.add("confidence high but the trace has unresolved nodes; use low")
+
+
+# ---- review ---------------------------------------------------------------------------------
+def check_review(r, work, column, p):
+    for k in ("target_column", "accepted", "issues", "evidence"):
+        if k not in r:
+            p.add(f"review: missing '{k}'")
+    if p:
+        return
+    if r["target_column"] != column:
+        p.add("review.target_column mismatch")
+    if r["accepted"] and r["issues"]:
+        p.add("review accepted but lists issues")
+    if not r["accepted"] and not r["issues"]:
+        p.add("review rejected without issues")
+    check_evidence(r["evidence"], work, "review", p)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("kind", choices=["manifest", "finding", "review"])
+    ap.add_argument("file")
+    ap.add_argument("--column")
+    ap.add_argument("--work", default="/work")
+    a = ap.parse_args()
+    work = Path(a.work)
+    p = Problems()
+    try:
+        data = json.loads(Path(a.file).read_text())
+    except (OSError, ValueError) as exc:
+        print(f"cannot read {a.file}: {exc}")
+        return 2
+    if a.kind == "manifest":
+        check_manifest(data, work, p)
+    elif a.kind == "finding":
+        check_finding(data, work, a.column, p)
+    else:
+        check_review(data, work, a.column, p)
+    for msg in p:
+        print(msg)
+    return 2 if p else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

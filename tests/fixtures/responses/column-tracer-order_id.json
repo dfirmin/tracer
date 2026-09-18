@@ -1,0 +1,113 @@
+{
+ "target_column": "order_id",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "mart",
+   "table": "daily_sales",
+   "column": "order_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "s.order_id"
+    }
+   ]
+  },
+  {
+   "id": "vt_oid",
+   "schema": "",
+   "table": "vt_sales",
+   "column": "order_id",
+   "scope": "",
+   "source_type": "volatile",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "o.order_id"
+    }
+   ]
+  },
+  {
+   "id": "o_oid",
+   "schema": "raw",
+   "table": "orders",
+   "column": "order_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "o.order_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "vt_oid",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "s.order_id",
+   "business_rule": "Pass-through.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "s.order_id"
+    }
+   ]
+  },
+  {
+   "source_id": "o_oid",
+   "target_id": "vt_oid",
+   "dependency_kind": "value",
+   "expression": "o.order_id",
+   "business_rule": "Pass-through.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "o.order_id"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "o_oid",
+   "mapping_rule": "o.order_id",
+   "mapping_business_rule": "Order identifier carried through unchanged from the orders table.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "o.order_id"
+    }
+   ]
+  }
+ ]
+}

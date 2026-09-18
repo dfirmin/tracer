@@ -1,0 +1,36 @@
+# docker compose run --rm tracer edw.claim_fact
+# Required env: ANTHROPIC_API_KEY (or ANTHROPIC_BASE_URL + gateway auth), TARGET_WORKSPACE, LINEAGE_OUTPUT
+services:
+  tracer:
+    build:
+      context: .
+      args:
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-latest}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m
+      - /home/lineage:rw,nosuid,nodev,size=256m,uid=1000,gid=1000
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      LINEAGE_FANOUT: ${LINEAGE_FANOUT:-process}
+      LINEAGE_CONCURRENCY: ${LINEAGE_CONCURRENCY:-8}
+      LINEAGE_CONDUCTOR_MODEL: ${LINEAGE_CONDUCTOR_MODEL:-opus}
+      LINEAGE_TRACER_MODEL: ${LINEAGE_TRACER_MODEL:-sonnet}
+      LINEAGE_REVIEW: ${LINEAGE_REVIEW:-low}
+      LINEAGE_CALL_BUDGET: ${LINEAGE_CALL_BUDGET:-2}
+      LINEAGE_RUN_BUDGET: ${LINEAGE_RUN_BUDGET:-100}
+      LINEAGE_CODE_URL_BASE: ${LINEAGE_CODE_URL_BASE:-}
+    volumes:
+      - type: bind
+        source: ${TARGET_WORKSPACE:?Set TARGET_WORKSPACE to a clean git checkout}
+        target: /work/repo
+        read_only: true
+      - type: bind
+        source: ${LINEAGE_OUTPUT:?Set LINEAGE_OUTPUT to a writable output directory}
+        target: /work/.lineage
+    mem_limit: 4g
+    pids_limit: 512
