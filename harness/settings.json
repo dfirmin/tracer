@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Read", "Grep", "Glob",
+      "Bash(rg *)", "Bash(git log *)", "Bash(git blame *)", "Bash(git show *)", "Bash(ls *)", "Bash(wc *)", "Bash(cat *)", "Bash(head *)", "Bash(jq *)", "Bash(python3 -c *)",
+      "Write(.lineage/**)",
+      "Agent(column-tracer)"
+    ],
+    "deny": ["Edit", "WebFetch", "WebSearch", "Bash(git push *)", "Bash(rm *)", "Write(repo/**)"]
+  },
+  "env": {
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "10",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "1"
+  }
+}

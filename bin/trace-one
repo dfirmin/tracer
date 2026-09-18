@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# trace-one <column> — run the column-tracer agent as its own headless session for one column.
+# Expects RUN_DIR, TARGET, CODE_URL_BASE, SCHEMAS in the environment (set by bin/tracer).
+set -uo pipefail
+COL="$1"
+SAFE=$(echo "$COL" | tr -c 'A-Za-z0-9_\n' '_')
+OUT="$RUN_DIR/findings/$SAFE.json"
+LOG="$RUN_DIR/logs/trace-$SAFE.json"
+[[ -s "$OUT" ]] && { echo "  skip $COL (exists)"; exit 0; }
+
+PROMPT="Target: $TARGET
+Column: $COL
+Manifest: $RUN_DIR/manifest.json
+Trace this column to its terminal sources and return the finding."
+
+for attempt in 1 2; do
+  claude -p "$PROMPT" \
+    --agent column-tracer --model "$LINEAGE_TRACER_MODEL" \
+    --permission-mode dontAsk --max-turns "$LINEAGE_MAX_TURNS" \
+    --output-format json --json-schema "$(cat "$SCHEMAS/finding.schema.json")" \
+    > "$LOG" 2>/dev/null
+  if jq -e '.structured_output.target_column' "$LOG" >/dev/null 2>&1; then
+    jq '.structured_output' "$LOG" > "$OUT"
+    echo "  ok   $COL ($(jq '.structured_output.sources | length' "$LOG") source(s), $(jq -r '.total_cost_usd' "$LOG") USD)"
+    exit 0
+  fi
+  echo "  retry $COL (attempt $attempt failed)" >&2
+done
+# Leave a gap record so assembly still covers every column.
+jq -n --arg c "$COL" '{target_column:$c, sources:[], hops:[], confidence:"low", unresolved_reason:"tracer session failed twice; see logs"}' > "$OUT"
+echo "  FAIL $COL" >&2
+exit 0

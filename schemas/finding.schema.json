@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lineage finding — one column traced to its terminal sources",
+  "type": "object",
+  "required": ["target_column", "sources", "hops", "confidence"],
+  "properties": {
+    "target_column": {"type": "string"},
+    "sources": {
+      "description": "One entry per terminal source. A column with several contributing sources (CASE, COALESCE, UNION branches, arithmetic) has several entries.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_schema", "source_table", "source_column", "source_type", "mapping_rule", "mapping_business_rule", "code_path", "code_lines"],
+        "properties": {
+          "source_schema": {"type": "string"},
+          "source_table": {"type": "string"},
+          "source_column": {"type": "string", "description": "empty when source_type is literal or derived-without-column"},
+          "source_type": {"type": "string", "enum": ["physical", "external", "temp", "volatile", "view", "cte", "dataframe", "literal", "derived", "unknown"]},
+          "mapping_rule": {"type": "string", "description": "the full derivation from this source to the target column, composed across hops, as SQL/expression text"},
+          "mapping_business_rule": {"type": "string", "description": "one plain-English sentence a business analyst can read; no SQL keywords"},
+          "code_path": {"type": "string", "description": "repo-relative path of the most decisive expression for this source"},
+          "code_lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}
+        }
+      }
+    },
+    "hops": {
+      "description": "The chain you walked, target-side first. Lets a reviewer replay the trace.",
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["step", "object", "expression", "path", "lines"],
+        "properties": {
+          "step": {"type": "integer"},
+          "object": {"type": "string", "description": "the object read at this hop (table/temp/CTE/DataFrame)"},
+          "column": {"type": "string"},
+          "expression": {"type": "string"},
+          "path": {"type": "string"},
+          "lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}
+        }
+      }
+    },
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "unresolved_reason": {"type": ["string", "null"], "description": "set when any branch hit a dead end: what you looked for, where, and why it stopped"}
+  }
+}

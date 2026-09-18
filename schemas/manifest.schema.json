@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lineage manifest — the conductor's discovery of how one target is built",
+  "type": "object",
+  "required": ["target", "build_sites", "columns", "object_index"],
+  "properties": {
+    "target": {
+      "type": "object", "required": ["schema", "name", "kind"],
+      "properties": {
+        "schema": {"type": "string"},
+        "name": {"type": "string"},
+        "kind": {"type": "string", "enum": ["table", "view", "materialized_view", "unknown"]}
+      }
+    },
+    "build_sites": {
+      "description": "Every place in the repo that writes the target, in execution order where known.",
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["path", "lines", "role"],
+        "properties": {
+          "path": {"type": "string", "description": "repo-relative path, e.g. repo/etl/claims/load_claim_fact.sql"},
+          "lines": {"$ref": "#/$defs/lines"},
+          "role": {"type": "string", "description": "e.g. final INSERT/MERGE, CREATE VIEW, saveAsTable, orchestration step"},
+          "shape": {"type": "string", "description": "e.g. Teradata BTEQ, Databricks SQL notebook, PySpark spark.sql, Jinja-templated SQL"}
+        }
+      }
+    },
+    "columns": {
+      "description": "Every column of the target, in the target's own order. Exhaustive.",
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["name", "ordinal", "defined_at"],
+        "properties": {
+          "name": {"type": "string"},
+          "ordinal": {"type": "integer"},
+          "defined_at": {"$ref": "#/$defs/loc", "description": "where this column's output expression is written"},
+          "expression": {"type": "string", "description": "the output expression as written, if short"}
+        }
+      }
+    },
+    "object_index": {
+      "description": "Intermediate objects (temp/volatile tables, CTEs, views, DataFrames) the build reads or creates, with where each is defined. A head start for tracers.",
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["name", "kind", "defined_at"],
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"type": "string", "enum": ["temp", "volatile", "cte", "view", "dataframe", "physical", "external", "config"]},
+          "defined_at": {"$ref": "#/$defs/loc"},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "templating": {
+      "description": "How names are resolved when they are not literal: config files, env vars, Jinja/f-string params, and the values you resolved.",
+      "type": "array",
+      "items": {"type": "object", "properties": {"placeholder": {"type": "string"}, "resolved_to": {"type": "string"}, "from": {"$ref": "#/$defs/loc"}}}
+    },
+    "notes": {"type": "string", "description": "Anything a tracer should know before starting: gotchas, ordering, dead ends already hit."}
+  },
+  "$defs": {
+    "lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}},
+    "loc": {"type": "object", "required": ["path", "lines"], "properties": {"path": {"type": "string"}, "lines": {"$ref": "#/$defs/lines"}}}
+  }
+}
