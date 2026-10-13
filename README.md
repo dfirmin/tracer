@@ -1,3 +1,5 @@
+<img src="docs/tracer-hero.svg" alt="Agents hop through several column nodes, tracing lineage back to a single source" width="100%">
+
 # tracer
 
 Produces a source-to-target mapping CSV for one table/view by **reading** the ETL repo that builds it. No SQL parser, no per-dialect adapters: a conductor discovers how the target is built, one tracer per column walks the derivation hop by hop to its terminal sources as a cited graph, the harness checks every citation against the file, an optional reviewer replays the trace, and a small script joins the findings into a CSV with a code link on every row.
