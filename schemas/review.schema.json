@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lineage review — an independent check of one finding against the source",
+  "type": "object",
+  "required": ["target_column", "accepted", "issues", "evidence"],
+  "properties": {
+    "target_column": {"type": "string"},
+    "accepted": {"type": "boolean"},
+    "issues": {"type": "array", "items": {"type": "string"}, "description": "specific, with paths: what is missing or contradicted. Empty when accepted."},
+    "evidence": {"type": "array", "minItems": 1, "items": {
+      "type": "object", "required": ["path", "start_line", "end_line", "quote"],
+      "properties": {"path": {"type": "string"}, "start_line": {"type": "integer", "minimum": 1}, "end_line": {"type": "integer", "minimum": 1}, "quote": {"type": "string"}}
+    }}
+  }
+}

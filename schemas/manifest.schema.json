@@ -1,40 +1,98 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Lineage manifest — the conductor's discovery of how one target is built",
+  "title": "Lineage manifest \u2014 the conductor's discovery of how one target is built",
   "type": "object",
-  "required": ["target", "build_sites", "columns", "object_index"],
+  "required": [
+    "target",
+    "build_sites",
+    "columns",
+    "object_index",
+    "enumeration_complete"
+  ],
   "properties": {
     "target": {
-      "type": "object", "required": ["schema", "name", "kind"],
+      "type": "object",
+      "required": [
+        "schema",
+        "name",
+        "kind"
+      ],
       "properties": {
-        "schema": {"type": "string"},
-        "name": {"type": "string"},
-        "kind": {"type": "string", "enum": ["table", "view", "materialized_view", "unknown"]}
+        "schema": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "table",
+            "view",
+            "materialized_view",
+            "unknown"
+          ]
+        }
       }
     },
     "build_sites": {
       "description": "Every place in the repo that writes the target, in execution order where known.",
-      "type": "array", "minItems": 1,
+      "type": "array",
+      "minItems": 1,
       "items": {
-        "type": "object", "required": ["path", "lines", "role"],
+        "type": "object",
+        "required": [
+          "role",
+          "evidence"
+        ],
         "properties": {
-          "path": {"type": "string", "description": "repo-relative path, e.g. repo/etl/claims/load_claim_fact.sql"},
-          "lines": {"$ref": "#/$defs/lines"},
-          "role": {"type": "string", "description": "e.g. final INSERT/MERGE, CREATE VIEW, saveAsTable, orchestration step"},
-          "shape": {"type": "string", "description": "e.g. Teradata BTEQ, Databricks SQL notebook, PySpark spark.sql, Jinja-templated SQL"}
+          "role": {
+            "type": "string",
+            "description": "e.g. final INSERT/MERGE, CREATE VIEW, saveAsTable, orchestration step"
+          },
+          "shape": {
+            "type": "string",
+            "description": "e.g. Teradata BTEQ, Databricks SQL notebook, PySpark spark.sql, Jinja-templated SQL"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/evidence"
+            }
+          }
         }
       }
     },
     "columns": {
       "description": "Every column of the target, in the target's own order. Exhaustive.",
-      "type": "array", "minItems": 1,
+      "type": "array",
+      "minItems": 1,
       "items": {
-        "type": "object", "required": ["name", "ordinal", "defined_at"],
+        "type": "object",
+        "required": [
+          "name",
+          "ordinal",
+          "evidence"
+        ],
         "properties": {
-          "name": {"type": "string"},
-          "ordinal": {"type": "integer"},
-          "defined_at": {"$ref": "#/$defs/loc", "description": "where this column's output expression is written"},
-          "expression": {"type": "string", "description": "the output expression as written, if short"}
+          "name": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer"
+          },
+          "expression": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/evidence"
+            },
+            "description": "where this column's output expression is written"
+          }
         }
       }
     },
@@ -42,24 +100,102 @@
       "description": "Intermediate objects (temp/volatile tables, CTEs, views, DataFrames) the build reads or creates, with where each is defined. A head start for tracers.",
       "type": "array",
       "items": {
-        "type": "object", "required": ["name", "kind", "defined_at"],
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "evidence"
+        ],
         "properties": {
-          "name": {"type": "string"},
-          "kind": {"type": "string", "enum": ["temp", "volatile", "cte", "view", "dataframe", "physical", "external", "config"]},
-          "defined_at": {"$ref": "#/$defs/loc"},
-          "note": {"type": "string"}
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "temp",
+              "volatile",
+              "cte",
+              "view",
+              "dataframe",
+              "physical",
+              "external",
+              "file",
+              "config"
+            ]
+          },
+          "scope": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/evidence"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
     "templating": {
       "description": "How names are resolved when they are not literal: config files, env vars, Jinja/f-string params, and the values you resolved.",
       "type": "array",
-      "items": {"type": "object", "properties": {"placeholder": {"type": "string"}, "resolved_to": {"type": "string"}, "from": {"$ref": "#/$defs/loc"}}}
+      "items": {
+        "type": "object",
+        "properties": {
+          "placeholder": {
+            "type": "string"
+          },
+          "resolved_to": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/evidence"
+            }
+          }
+        }
+      }
     },
-    "notes": {"type": "string", "description": "Anything a tracer should know before starting: gotchas, ordering, dead ends already hit."}
+    "notes": {
+      "type": "string",
+      "description": "Anything a tracer should know before starting: gotchas, ordering, dead ends already hit."
+    },
+    "enumeration_complete": {
+      "type": "boolean",
+      "description": "true only when every column of the target is listed; false stops nothing but is reported"
+    }
   },
   "$defs": {
-    "lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}},
-    "loc": {"type": "object", "required": ["path", "lines"], "properties": {"path": {"type": "string"}, "lines": {"$ref": "#/$defs/lines"}}}
+    "evidence": {
+      "type": "object",
+      "required": [
+        "path",
+        "start_line",
+        "end_line",
+        "quote"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quote": {
+          "type": "string",
+          "description": "verbatim text within those lines \u2014 the harness checks it"
+        }
+      }
+    }
   }
 }

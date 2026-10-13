@@ -1,0 +1,116 @@
+{
+ "target": {
+  "schema": "mart",
+  "name": "daily_sales",
+  "kind": "table"
+ },
+ "build_sites": [
+  {
+   "role": "CREATE TABLE AS final select",
+   "shape": "Teradata SQL",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 1,
+     "end_line": 9,
+     "quote": "CREATE TABLE mart.daily_sales AS"
+    }
+   ]
+  }
+ ],
+ "columns": [
+  {
+   "name": "order_id",
+   "ordinal": 1,
+   "expression": "s.order_id",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 2,
+     "end_line": 2,
+     "quote": "s.order_id"
+    }
+   ]
+  },
+  {
+   "name": "net_usd",
+   "ordinal": 2,
+   "expression": "s.net_amount * fx.rate",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "s.net_amount * fx.rate AS net_usd"
+    }
+   ]
+  },
+  {
+   "name": "segment",
+   "ordinal": 3,
+   "expression": "COALESCE(c.segment, 'UNKNOWN')",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "COALESCE(c.segment, 'UNKNOWN') AS segment"
+    }
+   ]
+  }
+ ],
+ "object_index": [
+  {
+   "name": "vt_sales",
+   "kind": "volatile",
+   "scope": "01_stage.sql first write",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 1,
+     "end_line": 1,
+     "quote": "CREATE VOLATILE TABLE vt_sales AS"
+    }
+   ]
+  },
+  {
+   "name": "raw.orders",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "FROM raw.orders AS o"
+    }
+   ]
+  },
+  {
+   "name": "raw.customers",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 6,
+     "end_line": 6,
+     "quote": "JOIN raw.customers AS c"
+    }
+   ]
+  },
+  {
+   "name": "raw.exchange_rates",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 7,
+     "end_line": 7,
+     "quote": "JOIN raw.exchange_rates AS fx"
+    }
+   ]
+  }
+ ],
+ "templating": [],
+ "enumeration_complete": true,
+ "notes": "01_stage.sql runs before 02_target.sql in one Teradata session; raw.* have no producers in this repo."
+}
