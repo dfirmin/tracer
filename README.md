@@ -25,11 +25,11 @@ Output in `out/<run>/`:
 | `lineage.csv` | the deliverable: one row per terminal **value** source of each target column. Named `lineage.partial.csv` when any column has a gap |
 | `dependencies.csv` | join keys, filters, group/window/order columns and control flags, deduplicated per target table — the impact-analysis view |
 | `gaps.md` | columns that did not fully resolve, with the tracer's reasons |
-| `report.json` | per-column status, confidence, review outcome, spend |
+| `report.json` | `complete`, per-reason counts for why not (`incomplete_reasons`), per-column status, confidence, review outcome, spend |
 | `manifest.json`, `findings/*.json`, `reviews/*.json` | the agents' validated outputs; `findings/` are full graphs with scope and evidence |
 | `budget.json`, `logs/` | spend ledger; raw session envelopes, stderr, and `*.problems` (what the validator rejected) |
 
-Exit codes: `0` complete, `3` partial (a column has a gap or the run budget stopped dispatch), `1` discovery failed, `2` bad input.
+Exit codes: `0` complete, `3` partial, `1` discovery failed, `2` bad input or a resume that doesn't match the run. A run is complete only when the conductor confirmed the column list (`enumeration_complete`) and no column is missing, failed, unresolved, low-confidence, or — when `LINEAGE_REVIEW` selects it — lacks an accepted review of its current version.
 
 | Env | Default | Meaning |
 |---|---|---|
@@ -41,7 +41,7 @@ Exit codes: `0` complete, `3` partial (a column has a gap or the run budget stop
 | `LINEAGE_ATTEMPTS` / `LINEAGE_MAX_TURNS` / `LINEAGE_TIMEOUT` | `2` / `60` / `900` | per session |
 | `LINEAGE_CODE_URL_BASE` | from `origin` + HEAD | override for GHES or non-GitHub hosts |
 
-Re-running with `--run <same name>` skips the manifest, every column with a finding, and every finished review. It refuses if the repo's HEAD moved.
+Re-running with `--run <same name>` skips the manifest, every column with a validated finding, and every review that still matches its finding. Failed columns (`findings/<col>.failed.json`) are retried, stale reviews are redone, and a finding that was never reviewed gets one without being re-traced. It refuses to resume if the target, repo, commit, code-URL base, or harness version differ from what the run was started with (`run.json`), naming what changed.
 
 ## How it works
 

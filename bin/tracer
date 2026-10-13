@@ -6,8 +6,10 @@
 # If --repo is omitted, $WORK/repo must already be mounted (docker -v /path/to/repo:/work/repo:ro).
 # Artifacts land in $WORK/.lineage/<run>/:
 #   manifest.json        conductor's discovery (validated: every citation is real)
-#   findings/<col>.json  one validated tracer graph per column (resumable; existing files are skipped)
-#   reviews/<col>.json   independent review, when LINEAGE_REVIEW selects the column
+#   run.json             what this run is valid for (target, sha, harness version …); resume refuses a mismatch
+#   findings/<col>.json  one validated tracer graph per column (resumable: these are skipped)
+#   findings/<col>.failed.json  why the last attempt failed; retried on resume, never a result
+#   reviews/<col>.json   independent review bound to the finding version it saw (finding_hash)
 #   lineage.csv          the deliverable (lineage.partial.csv when any column has a gap)
 #   dependencies.csv     join/filter/group/window/order/control inputs, deduplicated per target table
 #   gaps.md, report.json, budget.json, logs/
@@ -50,13 +52,30 @@ export CODE_URL_BASE="${LINEAGE_CODE_URL_BASE:-$WEB/blob/$SHA}"
 RUN="${RUN:-$(echo "$TARGET" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_')-$(date -u +%Y%m%dT%H%M%SZ)}"
 export RUN_DIR=".lineage/$RUN" TARGET
 mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reviews" "$RUN_DIR/logs"
-if [[ -f "$RUN_DIR/run.json" ]] && [[ "$(jq -r .sha "$RUN_DIR/run.json")" != "$SHA" ]]; then
-  echo "run $RUN was started at $(jq -r .sha "$RUN_DIR/run.json"), repo is now at $SHA — use a new --run" >&2; exit 2
+
+# ---- run identity: what a run's findings are valid for ----------------------------------------
+# Resume reuses findings only when every component matches. The harness version covers the
+# agents, skills and schemas, so findings from an older prompt/contract are never mixed in.
+HARNESS_VERSION=$(cd "$LINEAGE_HOME" && find harness schemas -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16)
+IDENTITY=$(jq -nc --arg t "$TARGET" --arg r "$REMOTE" --arg s "$SHA" --arg c "$CODE_URL_BASE" --arg h "$HARNESS_VERSION" \
+  '{target:$t, repo:$r, sha:$s, code_url_base:$c, harness_version:$h}')
+RUN_IDENTITY=$(echo -n "$IDENTITY" | sha256sum | cut -c1-16)
+if [[ -f "$RUN_DIR/run.json" ]]; then
+  if ! jq -e '.identity' "$RUN_DIR/run.json" >/dev/null 2>&1; then
+    echo "run $RUN predates run identity tracking; its findings cannot be trusted for resume — use a new --run" >&2; exit 2
+  fi
+  DIFF=$(jq -r --argjson now "$IDENTITY" '.identity | to_entries[] | select(.value != $now[.key]) | "\(.key): \(.value) → \($now[.key])"' "$RUN_DIR/run.json")
+  if [[ -n "$DIFF" ]]; then
+    echo "run $RUN was started for a different input and cannot be resumed — use a new --run. Changed:" >&2
+    echo "$DIFF" | sed 's/^/  /' >&2; exit 2
+  fi
 fi
-[[ -f "$RUN_DIR/run.json" ]] || cat > "$RUN_DIR/run.json" <<JSON
-{"target":"$TARGET","repo":"$REMOTE","sha":"$SHA","code_url_base":"$CODE_URL_BASE","fanout":"$LINEAGE_FANOUT","review":"$LINEAGE_REVIEW","started":"$(date -u +%FT%TZ)"}
-JSON
-echo "run: $RUN_DIR  target: $TARGET  sha: $SHA  fanout: $LINEAGE_FANOUT  review: $LINEAGE_REVIEW"
+[[ -f "$RUN_DIR/run.json" ]] || jq -n --arg t "$TARGET" --arg r "$REMOTE" --arg s "$SHA" --arg c "$CODE_URL_BASE" \
+  --arg f "$LINEAGE_FANOUT" --arg v "$LINEAGE_REVIEW" --arg i "$RUN_IDENTITY" --argjson id "$IDENTITY" --arg d "$(date -u +%FT%TZ)" \
+  '{target:$t, repo:$r, sha:$s, code_url_base:$c, fanout:$f, review:$v, run_identity:$i, identity:$id, started:$d}' > "$RUN_DIR/run.json"
+# review policy is per invocation, not part of identity: a resumed run may add reviews.
+jq --arg v "$LINEAGE_REVIEW" '.review = $v' "$RUN_DIR/run.json" > "$RUN_DIR/run.json.tmp" && mv "$RUN_DIR/run.json.tmp" "$RUN_DIR/run.json"
+echo "run: $RUN_DIR  target: $TARGET  sha: $SHA  identity: $RUN_IDENTITY  fanout: $LINEAGE_FANOUT  review: $LINEAGE_REVIEW"
 
 # ---- 1. discover (conductor) ----------------------------------------------------------------
 if [[ ! -s "$RUN_DIR/manifest.json" ]]; then

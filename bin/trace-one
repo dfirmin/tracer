@@ -1,23 +1,38 @@
 #!/usr/bin/env bash
 # trace-one <column> — one headless column-tracer session; validated, budgeted, resumable.
+#
+# Files per column under $RUN_DIR/findings/:
+#   <col>.json         a validated finding — the only thing resume treats as done
+#   <col>.failed.json  the last failed attempt's reasons — a retry queue entry, never a result
 set -uo pipefail
 source "$LINEAGE_HOME/bin/lib/session.sh"
 COL="$1"; SAFE=$(echo "$COL" | tr -c 'A-Za-z0-9_\n' '_')
 OUT="$RUN_DIR/findings/$SAFE.json"
-[[ -s "$OUT" ]] && { echo "  skip $COL (exists)"; exit 0; }
+FAILED="$RUN_DIR/findings/$SAFE.failed.json"
+
+# Resume: skip only a finding that exists and is not a failure marker. A finding carrying
+# failed:true (written by an earlier harness version) is moved aside and retried.
+if [[ -s "$OUT" ]]; then
+  if jq -e '.failed == true' "$OUT" >/dev/null 2>&1; then
+    mv "$OUT" "$FAILED"
+  else
+    echo "  skip $COL (exists)"; exit 0
+  fi
+fi
 
 PROMPT="Target: $TARGET
 Column: $COL
 Manifest: $RUN_DIR/manifest.json
 Trace this column to its terminal sources and return the finding."
 if run_session "trace-$SAFE" column-tracer "$LINEAGE_TRACER_MODEL" "$LINEAGE_HOME/schemas/finding.schema.json" finding "$COL" "$PROMPT" "$OUT"; then
+  rm -f "$FAILED"
   echo "  ok   $COL ($(jq '.mappings | length' "$OUT") source(s), confidence $(jq -r .confidence "$OUT"))"
 else
   rc=$?
   [[ $rc -eq 3 ]] && { echo "  STOP $COL: run budget exhausted" >&2; exit 0; }
   reason=$(sed 's/^/harness: /' "$RUN_DIR/logs/trace-$SAFE.problems" 2>/dev/null | head -5 | jq -R . | jq -s .)
   jq -n --arg c "$COL" --argjson why "${reason:-[\"tracer session failed\"]}" \
-    '{target_column:$c, root_id:"", nodes:[], edges:[], mappings:[], confidence:"low", unresolved:$why, failed:true}' > "$OUT"
+    '{target_column:$c, failed:true, unresolved:$why, attempted_at:(now|todate)}' > "$FAILED"
   echo "  FAIL $COL (see $RUN_DIR/logs/trace-$SAFE.*)" >&2
 fi
 exit 0

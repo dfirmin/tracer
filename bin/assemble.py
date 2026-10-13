@@ -10,6 +10,9 @@ import csv, json, sys
 from pathlib import Path
 from urllib.parse import quote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from finding_hash import finding_hash  # noqa: E402
+
 COLUMNS = ["Target Schema", "Target Table", "Target Column",
            "Source Schema", "Source Table", "Source Column", "Source Type",
            "Mapping Rule", "Mapping Business Rule", "Code URL"]
@@ -35,23 +38,82 @@ def safe(name):
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
 
 
+# ---- completeness ---------------------------------------------------------------------------
+# A run is complete only when every reason below is zero and the conductor enumerated every
+# column. Each reason is counted separately in report.json so a partial run says why.
+REASONS = ("missing", "failed", "unresolved", "low_confidence",
+           "review_rejected", "review_stale", "review_missing")
+reasons = {r: 0 for r in REASONS}
+review_policy = meta.get("review", "none")
+
+
+def review_required(finding):
+    if review_policy == "all":
+        return True
+    if review_policy == "low":
+        return finding.get("confidence") != "high" or bool(finding.get("unresolved"))
+    return False
+
+
+def review_status(finding):
+    """not_required | accepted | rejected | stale | missing — relative to this finding's version."""
+    if not review_required(finding):
+        return "not_required"
+    review = finding.get("review")
+    if not review:
+        return "missing"
+    if review.get("finding_hash") != finding_hash(finding):
+        return "stale"
+    return "accepted" if review.get("accepted") else "rejected"
+
+
 rows, deps, gaps, missing, coverage = [], {}, [], [], []
 for col in manifest["columns"]:
     f = run / "findings" / f"{safe(col['name'])}.json"
+    failed_marker = run / "findings" / f"{safe(col['name'])}.failed.json"
     if not f.exists():
-        missing.append(col["name"])
-        coverage.append({"column": col["name"], "status": "missing"})
+        if failed_marker.exists():
+            why = json.loads(failed_marker.read_text()).get("unresolved") or ["tracer session failed"]
+            reasons["failed"] += 1
+            coverage.append({"column": col["name"], "status": "failed", "unresolved": why})
+            gaps.append((col["name"], "failed", why))
+            rows.append({"Target Schema": tgt["schema"], "Target Table": tgt["name"], "Target Column": col["name"],
+                         "Source Schema": "", "Source Table": "", "Source Column": "", "Source Type": "unresolved",
+                         "Mapping Rule": "", "Mapping Business Rule": "; ".join(why), "Code URL": url(col.get("evidence"))})
+        else:
+            missing.append(col["name"])
+            reasons["missing"] += 1
+            coverage.append({"column": col["name"], "status": "missing"})
         continue
     finding = json.loads(f.read_text())
     nodes = {n["id"]: n for n in finding.get("nodes", [])}
     unresolved = finding.get("unresolved") or []
-    status = "complete" if not unresolved and finding.get("confidence") != "low" else "partial"
-    if finding.get("failed"):
-        status = "failed"
+    problems = []
+    if finding.get("failed"):                      # a pre-1.1 failure marker left in place of a finding
+        problems.append("failed")
+    if unresolved:
+        problems.append("unresolved")
+    if finding.get("confidence") == "low":
+        problems.append("low_confidence")
+    rstatus = review_status(finding)
+    if rstatus in ("rejected", "stale", "missing"):
+        problems.append(f"review_{rstatus}")
+    for p in problems:
+        reasons[p] += 1
+    status = "failed" if "failed" in problems else ("complete" if not problems else "partial")
     coverage.append({"column": col["name"], "status": status, "confidence": finding.get("confidence"),
-                     "unresolved": unresolved, "reviewed": finding.get("review", {}).get("accepted")})
+                     "unresolved": unresolved, "review": rstatus, "problems": problems})
     if status != "complete":
-        gaps.append((col["name"], finding.get("confidence"), unresolved or [finding.get("unresolved_reason", "low confidence")]))
+        whys = list(unresolved)
+        if finding.get("confidence") == "low" and not unresolved:
+            whys.append("low confidence")
+        if rstatus == "rejected":
+            whys += [f"review: {i}" for i in finding["review"].get("issues", [])] or ["review rejected"]
+        elif rstatus == "stale":
+            whys.append("review is of an earlier version of this finding")
+        elif rstatus == "missing":
+            whys.append("review required but not done")
+        gaps.append((col["name"], finding.get("confidence"), whys or ["failed"]))
 
     mappings = finding.get("mappings") or []
     if not mappings:
@@ -80,7 +142,8 @@ for col in manifest["columns"]:
             "Predicate": e["expression"], "Business Rule": e["business_rule"], "Code URL": url(e.get("evidence")),
         })
 
-complete = not gaps and not missing
+enumeration_complete = manifest.get("enumeration_complete") is True
+complete = enumeration_complete and not any(reasons.values())
 suffix = "" if complete else ".partial"
 for name in ("lineage.csv", "lineage.partial.csv"):
     (run / name).unlink(missing_ok=True)
@@ -93,6 +156,8 @@ with (run / "dependencies.csv").open("w", newline="", encoding="utf-8") as fh:
 
 lines = [f"# Gaps — {tgt['schema']}.{tgt['name']}", "",
          f"Columns: {len(manifest['columns'])}  Rows: {len(rows)}  Gaps: {len(gaps)}  Missing findings: {len(missing)}", ""]
+if not enumeration_complete:
+    lines += ["- **(enumeration)**: the conductor did not confirm that every target column is listed", ""]
 for name, conf, whys in gaps:
     lines.append(f"- **{name}** ({conf}):")
     lines.extend(f"  - {w}" for w in whys)
@@ -103,9 +168,12 @@ for name in missing:
 spend = 0.0
 if (run / "budget.json").exists():
     spend = sum(e["usd"] for e in json.loads((run / "budget.json").read_text()))
-report = {"target": f"{tgt['schema']}.{tgt['name']}", "commit": meta.get("sha"), "complete": complete,
+report = {"target": f"{tgt['schema']}.{tgt['name']}", "commit": meta.get("sha"), "run_identity": meta.get("run_identity"),
+          "complete": complete, "review_policy": review_policy,
+          "incomplete_reasons": {**reasons, "enumeration_incomplete": not enumeration_complete},
           "column_count": len(manifest["columns"]), "row_count": len(rows), "dependency_count": len(deps),
           "enumeration_complete": manifest.get("enumeration_complete"), "columns": coverage,
           "committed_spend_usd": round(spend, 4), "mapping_file": f"lineage{suffix}.csv"}
 (run / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-print(f"rows={len(rows)} deps={len(deps)} gaps={len(gaps)} missing={len(missing)} complete={complete}")
+why = " ".join(f"{k}={v}" for k, v in report["incomplete_reasons"].items() if v)
+print(f"rows={len(rows)} deps={len(deps)} gaps={len(gaps)} complete={complete}" + (f" ({why})" if why else ""))

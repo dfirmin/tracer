@@ -41,9 +41,22 @@ class Run:
                     "LINEAGE_REVIEW": review, "LINEAGE_CONCURRENCY": "3", **(env or {})}
         self.run_name = "t"
 
-    def tracer(self, *args):
-        return subprocess.run([str(ROOT / "bin" / "tracer"), "mart.daily_sales", "--run", self.run_name, *args],
+    def tracer(self, *args, target="mart.daily_sales"):
+        return subprocess.run([str(ROOT / "bin" / "tracer"), target, "--run", self.run_name, *args],
                               env=self.env, capture_output=True, text=True)
+
+    def report(self):
+        return json.loads((self.run_dir / "report.json").read_text())
+
+    def responses(self, **overrides):
+        """A private copy of the canned responses with some files' JSON patched; sets FAKE_RESPONSES."""
+        resp = Path(tempfile.mkdtemp(prefix="tracer-resp-")) / "responses"
+        shutil.copytree(ROOT / "tests" / "fixtures" / "responses", resp)
+        for name, patch in overrides.items():
+            f = resp / f"{name}.json"
+            d = json.loads(f.read_text()); d.update(patch); f.write_text(json.dumps(d))
+        self.env["FAKE_RESPONSES"] = str(resp)
+        return resp
 
     @property
     def run_dir(self):
@@ -159,17 +172,133 @@ class PipelineTests(unittest.TestCase):
     def test_rejected_review_triggers_one_repair(self):
         r = Run(review="all")
         self.addCleanup(r.close)
-        resp = Path(tempfile.mkdtemp()) / "responses"
-        shutil.copytree(ROOT / "tests" / "fixtures" / "responses", resp)
-        rej = json.loads((resp / "lineage-reviewer-segment.json").read_text())
-        rej.update(accepted=False, issues=["repo/examples/etl/02_target.sql: literal default missing"])
-        (resp / "lineage-reviewer-segment.json").write_text(json.dumps(rej))
-        r.env["FAKE_RESPONSES"] = str(resp)
+        r.responses(**{"lineage-reviewer-segment": dict(accepted=False, issues=["repo/examples/etl/02_target.sql: literal default missing"])})
         r.tracer()
         calls = r.calls()
         self.assertEqual(calls.count("column-tracer-segment"), 2)      # trace + repair
         self.assertEqual(calls.count("lineage-reviewer-segment"), 2)   # review + re-review
         self.assertTrue((r.run_dir / "findings" / "segment.rejected.json").exists())
+
+
+class CompletenessAndResumeTests(unittest.TestCase):
+    """Delivery 1.1 (issues #1/#2): a run is complete only when it really is, and resume never
+    reuses a failed finding, a stale review, or another run's inputs."""
+
+    def setUp(self):
+        self.r = Run()
+        self.addCleanup(self.r.close)
+
+    def test_failed_finding_is_retried_on_resume(self):
+        self.r.env.update(FAKE_FAIL_ONCE="column-tracer-segment", LINEAGE_ATTEMPTS="1")
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 3)
+        findings = self.r.run_dir / "findings"
+        self.assertTrue((findings / "segment.failed.json").exists())
+        self.assertFalse((findings / "segment.json").exists())
+        self.assertEqual(self.r.report()["incomplete_reasons"]["failed"], 1)
+        seg = [x for x in self.r.csv("lineage.partial.csv") if x["Target Column"] == "segment"]
+        self.assertEqual(seg[0]["Source Type"], "unresolved")
+
+        self.r.log.unlink()                                             # FAKE_FAIL_ONCE already fired: next call succeeds
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.r.calls(), ["column-tracer-segment"])     # only the failed column is re-traced
+        self.assertTrue((findings / "segment.json").exists())
+        self.assertFalse((findings / "segment.failed.json").exists())
+        self.assertTrue(self.r.report()["complete"])
+
+    def test_legacy_failed_marker_in_finding_file_is_retried(self):
+        self.r.tracer()
+        f = self.r.run_dir / "findings" / "segment.json"
+        f.write_text(json.dumps({"target_column": "segment", "failed": True, "unresolved": ["old harness"]}))
+        self.r.log.unlink()
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.r.calls(), ["column-tracer-segment"])
+
+    def test_rejected_review_that_survives_repair_is_not_complete(self):
+        r = Run(review="all")
+        self.addCleanup(r.close)
+        r.responses(**{"lineage-reviewer-segment": dict(accepted=False, issues=["repo/examples/etl/02_target.sql: literal default missing"])})
+        p = r.tracer()
+        self.assertEqual(p.returncode, 3)
+        rep = r.report()
+        self.assertFalse(rep["complete"])
+        self.assertEqual(rep["incomplete_reasons"]["review_rejected"], 1)
+        seg = [c for c in rep["columns"] if c["column"] == "segment"][0]
+        self.assertEqual(seg["review"], "rejected")
+        self.assertIn("review:", (r.run_dir / "gaps.md").read_text())
+        self.assertTrue((r.run_dir / "lineage.partial.csv").exists())
+
+    def test_enumeration_incomplete_is_not_complete(self):
+        self.r.responses(conductor=dict(enumeration_complete=False))
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 3)
+        rep = self.r.report()
+        self.assertFalse(rep["complete"])
+        self.assertTrue(rep["incomplete_reasons"]["enumeration_incomplete"])
+        self.assertEqual(sum(v for k, v in rep["incomplete_reasons"].items() if k != "enumeration_incomplete"), 0)
+        self.assertIn("enumeration", (self.r.run_dir / "gaps.md").read_text())
+
+    def test_review_is_bound_to_the_finding_version(self):
+        r = Run(review="all")
+        self.addCleanup(r.close)
+        r.tracer()
+        self.assertTrue(r.report()["complete"])
+        review = json.loads((r.run_dir / "reviews" / "segment.json").read_text())
+        self.assertEqual(len(review["finding_hash"]), 64)
+        # the finding changes under the review: assemble alone must call it stale …
+        f = r.run_dir / "findings" / "segment.json"
+        d = json.loads(f.read_text()); d["mappings"][0]["mapping_business_rule"] = "edited after review"; f.write_text(json.dumps(d))
+        subprocess.run([sys.executable, str(ROOT / "bin" / "assemble.py"), str(r.run_dir)], env=r.env, check=True, capture_output=True)
+        rep = r.report()
+        self.assertFalse(rep["complete"])
+        self.assertEqual(rep["incomplete_reasons"]["review_stale"], 1)
+        # … and a resumed run re-reviews that column without re-tracing it
+        r.log.unlink()
+        p = r.tracer()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(r.calls(), ["lineage-reviewer-segment"])
+        self.assertTrue((r.run_dir / "reviews" / "segment.stale.json").exists())
+        self.assertTrue(r.report()["complete"])
+
+    def test_missing_required_review_is_added_without_retracing(self):
+        self.r.tracer()                                                 # review=none: traced, unreviewed
+        self.assertTrue(self.r.report()["complete"])
+        self.r.log.unlink()
+        self.r.env["LINEAGE_REVIEW"] = "all"
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(sorted(self.r.calls()), ["lineage-reviewer-net_usd", "lineage-reviewer-order_id", "lineage-reviewer-segment"])
+        rep = self.r.report()
+        self.assertEqual(rep["review_policy"], "all")
+        self.assertTrue(rep["complete"])
+
+    def test_different_target_refuses_to_resume(self):
+        self.r.tracer()
+        self.r.log.unlink()
+        p = self.r.tracer(target="mart.other_table")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("target: mart.daily_sales → mart.other_table", p.stderr)
+        self.assertEqual(self.r.calls(), [])
+
+    def test_changed_harness_refuses_to_resume(self):
+        self.r.tracer()
+        rep = self.r.report()
+        self.assertEqual(len(rep["run_identity"]), 16)
+        run_json = self.r.run_dir / "run.json"
+        d = json.loads(run_json.read_text()); d["identity"]["harness_version"] = "0000000000000000"; run_json.write_text(json.dumps(d))
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("harness_version", p.stderr)
+
+    def test_run_without_identity_refuses_to_resume(self):
+        self.r.tracer()
+        run_json = self.r.run_dir / "run.json"
+        d = json.loads(run_json.read_text()); del d["identity"]; run_json.write_text(json.dumps(d))
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("new --run", p.stderr)
 
 
 class CheckTests(unittest.TestCase):
