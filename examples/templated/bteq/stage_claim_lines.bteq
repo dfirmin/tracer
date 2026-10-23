@@ -1,0 +1,17 @@
+.LOGON ${TD_TDPID}/${TD_USER},${TD_PASSWORD};
+
+DELETE FROM ${STG_DB}.claim_line_stg ALL;
+
+INSERT INTO ${STG_DB}.claim_line_stg (claim_id, policy_id, line_amount, service_dt)
+SELECT c.claim_id,
+       c.policy_id,
+       SUM(cl.line_amt),
+       MAX(cl.service_dt)
+FROM ${RAW_DB}.claim c
+JOIN ${RAW_DB}.claim_line cl
+  ON cl.claim_id = c.claim_id
+WHERE cl.status_cd <> 'V'
+GROUP BY c.claim_id, c.policy_id;
+
+.IF ERRORCODE <> 0 THEN .QUIT 8;
+.LOGOFF;

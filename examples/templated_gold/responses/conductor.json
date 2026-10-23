@@ -1,0 +1,509 @@
+{
+ "target": {
+  "schema": "EDW",
+  "name": "claim_fact",
+  "kind": "table"
+ },
+ "build_sites": [
+  {
+   "role": "nightly full load (INSERT OVERWRITE)",
+   "shape": "PySpark spark.sql f-string",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 15,
+     "end_line": 15,
+     "quote": "INSERT OVERWRITE {target}"
+    }
+   ]
+  },
+  {
+   "role": "post-load MERGE (paid_amount only)",
+   "shape": "Databricks SQL notebook",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "MERGE INTO ${edw_schema}.claim_fact AS t"
+    }
+   ]
+  },
+  {
+   "role": "ad hoc backfill via generic loader",
+   "shape": "PySpark spark.sql f-string; target from job JSON",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "\"target_table\": \"EDW.claim_fact\""
+    }
+   ]
+  }
+ ],
+ "statements": [
+  {
+   "id": "s1_stage_claim_lines",
+   "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+   "start_line": 5,
+   "end_line": 14,
+   "quote": "INSERT INTO ${STG_DB}.claim_line_stg",
+   "writes": "${STG_DB}.claim_line_stg",
+   "write_kind": "insert",
+   "role": "Teradata staging (table truncated first)",
+   "execution_order": 1,
+   "context": "scripts/run_stage.sh prod: STG_DB=STG, RAW_DB=RAW_CLAIMS"
+  },
+  {
+   "id": "s2_load_claim_fact",
+   "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+   "start_line": 14,
+   "end_line": 25,
+   "quote": "spark.sql(f\"\"\"",
+   "writes": "{target}",
+   "write_kind": "insert",
+   "role": "nightly full load; positional INSERT OVERWRITE (DDL order)",
+   "execution_order": 2,
+   "context": "job claim_fact_nightly, env=prod"
+  },
+  {
+   "id": "s3_apply_adjustments",
+   "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+   "start_line": 3,
+   "end_line": 11,
+   "quote": "MERGE INTO ${edw_schema}.claim_fact AS t",
+   "writes": "${edw_schema}.claim_fact",
+   "write_kind": "merge",
+   "role": "post-load adjustment; updates paid_amount only",
+   "execution_order": 3,
+   "context": "job claim_fact_nightly"
+  },
+  {
+   "id": "s4_generic_backfill",
+   "path": "repo/examples/templated/notebooks/generic_backfill.py",
+   "start_line": 8,
+   "end_line": 8,
+   "quote": "spark.sql(f\"INSERT INTO {dst}",
+   "writes": "{dst}",
+   "write_kind": "insert",
+   "role": "ad hoc backfill of rows before 2024-01-01; positional",
+   "context": "job backfill_claim_fact"
+  }
+ ],
+ "columns": [
+  {
+   "name": "claim_id",
+   "ordinal": 1,
+   "expression": "l.claim_id",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 16,
+     "end_line": 16,
+     "quote": "SELECT l.claim_id,"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_load_claim_fact",
+     "expression": "l.claim_id",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+       "start_line": 16,
+       "end_line": 16,
+       "quote": "SELECT l.claim_id,"
+      }
+     ]
+    },
+    {
+     "statement_id": "s4_generic_backfill",
+     "expression": "claim_id (position 1 of the columns widget)",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/generic_backfill.py",
+       "start_line": 8,
+       "end_line": 8,
+       "quote": "SELECT {cols} FROM {src}"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "policy_number",
+   "ordinal": 2,
+   "expression": "p.policy_number",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 17,
+     "end_line": 17,
+     "quote": "p.policy_number,"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_load_claim_fact",
+     "expression": "p.policy_number",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+       "start_line": 17,
+       "end_line": 17,
+       "quote": "p.policy_number,"
+      }
+     ]
+    },
+    {
+     "statement_id": "s4_generic_backfill",
+     "expression": "policy_number (position 2 of the columns widget)",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/generic_backfill.py",
+       "start_line": 8,
+       "end_line": 8,
+       "quote": "SELECT {cols} FROM {src}"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "line_of_business",
+   "ordinal": 3,
+   "expression": "UPPER(TRIM(p.lob_cd))",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 18,
+     "end_line": 18,
+     "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_load_claim_fact",
+     "expression": "UPPER(TRIM(p.lob_cd))",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+       "start_line": 18,
+       "end_line": 18,
+       "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+      }
+     ]
+    },
+    {
+     "statement_id": "s4_generic_backfill",
+     "expression": "line_of_business (position 3 of the columns widget)",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/generic_backfill.py",
+       "start_line": 8,
+       "end_line": 8,
+       "quote": "SELECT {cols} FROM {src}"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "paid_amount",
+   "ordinal": 4,
+   "expression": "l.line_amount",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 19,
+     "end_line": 19,
+     "quote": "l.line_amount AS paid_amount"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_load_claim_fact",
+     "expression": "l.line_amount",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+       "start_line": 19,
+       "end_line": 19,
+       "quote": "l.line_amount AS paid_amount"
+      }
+     ]
+    },
+    {
+     "statement_id": "s3_apply_adjustments",
+     "expression": "t.paid_amount + a.adj_amount",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+       "start_line": 11,
+       "end_line": 11,
+       "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+      }
+     ]
+    },
+    {
+     "statement_id": "s4_generic_backfill",
+     "expression": "paid_amount (position 4 of the columns widget)",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/generic_backfill.py",
+       "start_line": 8,
+       "end_line": 8,
+       "quote": "SELECT {cols} FROM {src}"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "load_dt",
+   "ordinal": 5,
+   "expression": "current_date()",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 20,
+     "end_line": 20,
+     "quote": "current_date() AS load_dt"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_load_claim_fact",
+     "expression": "current_date()",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+       "start_line": 20,
+       "end_line": 20,
+       "quote": "current_date() AS load_dt"
+      }
+     ]
+    },
+    {
+     "statement_id": "s4_generic_backfill",
+     "expression": "load_dt (position 5 of the columns widget)",
+     "evidence": [
+      {
+       "path": "repo/examples/templated/notebooks/generic_backfill.py",
+       "start_line": 8,
+       "end_line": 8,
+       "quote": "SELECT {cols} FROM {src}"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "object_index": [
+  {
+   "name": "STG.claim_line_stg",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "INSERT INTO ${STG_DB}.claim_line_stg"
+    }
+   ],
+   "scope": "written by s1 each night after DELETE ALL"
+  },
+  {
+   "name": "RAW_CLAIMS.policy",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 22,
+     "end_line": 22,
+     "quote": "JOIN {cfg['raw_schema']}.policy p"
+    }
+   ]
+  },
+  {
+   "name": "RAW_CLAIMS.claim",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "FROM ${RAW_DB}.claim c"
+    }
+   ]
+  },
+  {
+   "name": "RAW_CLAIMS.claim_line",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "JOIN ${RAW_DB}.claim_line cl"
+    }
+   ]
+  },
+  {
+   "name": "RAW_CLAIMS.claim_adjustment",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 6,
+     "end_line": 6,
+     "quote": "FROM ${raw_schema}.claim_adjustment"
+    }
+   ]
+  },
+  {
+   "name": "EDW.claim_fact_hist",
+   "kind": "physical",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "\"source_table\": \"EDW.claim_fact_hist\""
+    }
+   ],
+   "note": "read by the backfill job only"
+  }
+ ],
+ "templating": [
+  {
+   "placeholder": "{target}",
+   "resolved_to": "EDW.claim_fact",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "target = f\"{cfg['edw_schema']}.{table}\""
+    },
+    {
+     "path": "repo/examples/templated/jobs/claim_fact_nightly.json",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "\"target_table\": \"claim_fact\""
+    }
+   ]
+  },
+  {
+   "placeholder": "{cfg['stg_schema']}",
+   "resolved_to": "STG (prod)",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/conf/env/prod.yaml",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "stg_schema: STG"
+    }
+   ]
+  },
+  {
+   "placeholder": "{cfg['raw_schema']}",
+   "resolved_to": "RAW_CLAIMS (prod)",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/conf/env/prod.yaml",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "raw_schema: RAW_CLAIMS"
+    }
+   ]
+  },
+  {
+   "placeholder": "${edw_schema}",
+   "resolved_to": "EDW",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/claim_fact_nightly.json",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "\"edw_schema\": \"EDW\""
+    }
+   ]
+  },
+  {
+   "placeholder": "${raw_schema}",
+   "resolved_to": "RAW_CLAIMS",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/claim_fact_nightly.json",
+     "start_line": 25,
+     "end_line": 25,
+     "quote": "\"raw_schema\": \"RAW_CLAIMS\""
+    }
+   ]
+  },
+  {
+   "placeholder": "${STG_DB}",
+   "resolved_to": "STG (prod)",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/scripts/run_stage.sh",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "export STG_DB=STG RAW_DB=RAW_CLAIMS"
+    }
+   ]
+  },
+  {
+   "placeholder": "${RAW_DB}",
+   "resolved_to": "RAW_CLAIMS (prod)",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/scripts/run_stage.sh",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "export STG_DB=STG RAW_DB=RAW_CLAIMS"
+    }
+   ]
+  },
+  {
+   "placeholder": "{dst}",
+   "resolved_to": "EDW.claim_fact",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "\"target_table\": \"EDW.claim_fact\""
+    }
+   ]
+  },
+  {
+   "placeholder": "{src}",
+   "resolved_to": "EDW.claim_fact_hist",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "\"source_table\": \"EDW.claim_fact_hist\""
+    }
+   ]
+  },
+  {
+   "placeholder": "{cols}",
+   "resolved_to": "claim_id, policy_number, line_of_business, paid_amount, load_dt",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "\"columns\": \"claim_id"
+    }
+   ]
+  }
+ ],
+ "notes": "Column order is ddl/claim_fact.sql: both inserts are positional. apply_adjustments MERGE updates only paid_amount. The backfill target exists only in jobs/backfill_claim_fact.json (generic_backfill.py is shared). Prod bindings per the context; dev values are in conf/env/dev.yaml and scripts/run_stage.sh.",
+ "enumeration_complete": true
+}

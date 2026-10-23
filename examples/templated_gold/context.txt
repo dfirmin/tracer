@@ -1,0 +1,1 @@
+Environment: prod. Nightly schedule per jobs/schedule.txt (run_stage.sh prod, then Databricks job claim_fact_nightly), plus the ad hoc job backfill_claim_fact. Trace EDW.claim_fact under prod bindings.

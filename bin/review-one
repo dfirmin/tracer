@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# review-one <column> — independent review of a finding; one bounded repair if rejected.
+# LINEAGE_REVIEW: none | low (review findings with confidence low/medium or any unresolved) | all
+#
+# A review is bound to the finding version it looked at: reviews/<col>.json carries
+# finding_hash, and the finding carries the review under .review. On resume a review whose
+# hash no longer matches the finding is stale and is redone; a finding that was traced but
+# never reviewed is reviewed here without being traced again.
+set -uo pipefail
+source "$LINEAGE_HOME/bin/lib/session.sh"
+COL="$1"; SAFE=$(echo "$COL" | tr -c 'A-Za-z0-9_\n' '_')
+FINDING="$RUN_DIR/findings/$SAFE.json"; REVIEW="$RUN_DIR/reviews/$SAFE.json"
+HASH="python3 $LINEAGE_HOME/bin/lib/finding_hash.py"
+[[ -s "$FINDING" ]] || exit 0                                   # nothing traced (missing or failed) — not this stage's job
+if [[ "$LINEAGE_REVIEW" == "low" ]] && jq -e '.confidence == "high" and (.unresolved | length == 0)' "$FINDING" >/dev/null; then
+  exit 0
+fi
+
+stamp() {  # bind the review to the finding it reviewed, then copy it onto the finding for assemble
+  local h; h=$($HASH "$FINDING")
+  jq --arg h "$h" '.finding_hash = $h' "$REVIEW" > "$REVIEW.tmp" && mv "$REVIEW.tmp" "$REVIEW"
+  jq --slurpfile r "$REVIEW" '.review = $r[0]' "$FINDING" > "$FINDING.tmp" && mv "$FINDING.tmp" "$FINDING"
+}
+
+if [[ -s "$REVIEW" ]]; then
+  if [[ "$(jq -r '.finding_hash // ""' "$REVIEW")" == "$($HASH "$FINDING")" ]]; then
+    jq -e '.review' "$FINDING" >/dev/null 2>&1 || stamp
+    echo "  skip $COL (reviewed)"; exit 0
+  fi
+  mv "$REVIEW" "$RUN_DIR/reviews/$SAFE.stale.json"              # finding changed since this review
+fi
+
+PROMPT="Target: $TARGET
+Column: $COL
+Manifest: $RUN_DIR/manifest.json
+Finding to review: $FINDING
+Verify the finding against the source and return the review.$(inputs_prompt)"
+PROMPT_REVIEW="$PROMPT"
+run_session "review-$SAFE" lineage-reviewer "$LINEAGE_REVIEWER_MODEL" "$LINEAGE_HOME/schemas/review.schema.json" review "$COL" "$PROMPT" "$REVIEW" || exit 0
+stamp
+if jq -e .accepted "$REVIEW" >/dev/null; then
+  echo "  ok   $COL review accepted"
+else
+  echo "  fix  $COL review rejected: $(jq -r '.issues | length' "$REVIEW") issue(s) — repairing"
+  cp "$FINDING" "$RUN_DIR/findings/$SAFE.rejected.json"
+  PROMPT="Target: $TARGET
+Column: $COL
+Manifest: $RUN_DIR/manifest.json
+Your earlier finding is at $RUN_DIR/findings/$SAFE.rejected.json. An independent reviewer rejected it with these issues:
+$(jq -r '.issues[] | "- " + .' "$REVIEW")
+Re-read the cited source, fix every issue, and return the corrected finding.$(inputs_prompt)"
+  if run_session "repair-$SAFE" column-tracer "$LINEAGE_TRACER_MODEL" "$LINEAGE_HOME/schemas/finding.schema.json" finding "$COL" "$PROMPT" "$FINDING.repaired"; then
+    mv "$FINDING.repaired" "$FINDING"
+    mv "$REVIEW" "$RUN_DIR/reviews/$SAFE.first.json"
+    if run_session "rereview-$SAFE" lineage-reviewer "$LINEAGE_REVIEWER_MODEL" "$LINEAGE_HOME/schemas/review.schema.json" review "$COL" "$PROMPT_REVIEW" "$REVIEW" 2>/dev/null; then
+      stamp
+    else
+      # no re-review of the repaired finding: it is unreviewed, not accepted; assemble reports it
+      jq 'del(.review)' "$FINDING" > "$FINDING.tmp" && mv "$FINDING.tmp" "$FINDING"
+    fi
+  else
+    rm -f "$FINDING.repaired"                                   # keep the rejected finding, stamped with its rejection
+  fi
+fi
+exit 0

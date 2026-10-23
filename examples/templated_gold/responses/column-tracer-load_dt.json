@@ -1,0 +1,200 @@
+{
+ "target_column": "load_dt",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "EDW",
+   "table": "claim_fact",
+   "column": "load_dt",
+   "scope": "EDW.claim_fact after nightly load (s2) or backfill (s4)",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 20,
+     "end_line": 20,
+     "quote": "current_date() AS load_dt"
+    }
+   ]
+  },
+  {
+   "id": "now",
+   "schema": "",
+   "table": "",
+   "column": "current_date()",
+   "scope": "",
+   "source_type": "runtime",
+   "terminal": "runtime",
+   "boundary_reason": "current_date() when the nightly load runs",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 20,
+     "end_line": 20,
+     "quote": "current_date() AS load_dt"
+    }
+   ]
+  },
+  {
+   "id": "h_dt",
+   "schema": "EDW",
+   "table": "claim_fact_hist",
+   "column": "load_dt",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "backfill source; no writer in this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "\"source_table\": \"EDW.claim_fact_hist\""
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'EDW.claim_fact_hist' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_policy_id",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "policy_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_active",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "active_flag",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "now",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "current_date()",
+   "business_rule": "Stamped with the load date.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 20,
+     "end_line": 20,
+     "quote": "current_date() AS load_dt"
+    }
+   ]
+  },
+  {
+   "source_id": "h_dt",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "EDW.claim_fact_hist.load_dt (positional, columns widget)",
+   "business_rule": "Backfilled rows carry load_dt from EDW.claim_fact_hist as is.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    }
+   ]
+  },
+  {
+   "source_id": "p_policy_id",
+   "target_id": "root",
+   "dependency_kind": "join",
+   "expression": "p.policy_id = l.policy_id",
+   "business_rule": "Only claims whose policy exists in RAW_CLAIMS.policy are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ]
+  },
+  {
+   "source_id": "p_active",
+   "target_id": "root",
+   "dependency_kind": "filter",
+   "expression": "p.active_flag = 'Y'",
+   "business_rule": "Only active policies are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "now",
+   "mapping_rule": "current_date() at load time → load_dt",
+   "mapping_business_rule": "The date the nightly load ran.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 20,
+     "end_line": 20,
+     "quote": "current_date() AS load_dt"
+    }
+   ]
+  },
+  {
+   "source_id": "h_dt",
+   "mapping_rule": "EDW.claim_fact_hist.load_dt → load_dt for rows with load_dt < 2024-01-01 (backfill)",
+   "mapping_business_rule": "Historical rows keep their original load date.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    }
+   ]
+  }
+ ]
+}

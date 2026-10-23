@@ -1,0 +1,30 @@
+{
+  "name": "claim_fact_nightly",
+  "tasks": [
+    {
+      "task_key": "load_claim_fact",
+      "notebook_task": {
+        "notebook_path": "notebooks/load_claim_fact",
+        "base_parameters": {
+          "env": "prod",
+          "target_table": "claim_fact"
+        }
+      }
+    },
+    {
+      "task_key": "apply_adjustments",
+      "depends_on": [
+        {
+          "task_key": "load_claim_fact"
+        }
+      ],
+      "notebook_task": {
+        "notebook_path": "notebooks/apply_adjustments",
+        "base_parameters": {
+          "edw_schema": "EDW",
+          "raw_schema": "RAW_CLAIMS"
+        }
+      }
+    }
+  ]
+}

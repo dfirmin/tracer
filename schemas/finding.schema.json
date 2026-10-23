@@ -1,44 +1,74 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Lineage finding — one column traced to its terminal sources",
+  "title": "Lineage finding — one column traced as a scoped graph with verbatim evidence",
   "type": "object",
-  "required": ["target_column", "sources", "hops", "confidence"],
+  "required": ["target_column", "root_id", "nodes", "edges", "mappings", "confidence", "unresolved"],
   "properties": {
     "target_column": {"type": "string"},
-    "sources": {
-      "description": "One entry per terminal source. A column with several contributing sources (CASE, COALESCE, UNION branches, arithmetic) has several entries.",
-      "type": "array",
+    "root_id": {"type": "string", "description": "id of the node for the target column itself"},
+    "nodes": {
+      "description": "One node per column-at-a-definition. Two nodes may share table/column names if they are different states (a temp table rewritten later); scope keeps them apart.",
+      "type": "array", "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["source_schema", "source_table", "source_column", "source_type", "mapping_rule", "mapping_business_rule", "code_path", "code_lines"],
+        "required": ["id", "schema", "table", "column", "scope", "source_type", "terminal", "boundary_reason", "evidence"],
         "properties": {
-          "source_schema": {"type": "string"},
-          "source_table": {"type": "string"},
-          "source_column": {"type": "string", "description": "empty when source_type is literal or derived-without-column"},
-          "source_type": {"type": "string", "enum": ["physical", "external", "temp", "volatile", "view", "cte", "dataframe", "literal", "derived", "unknown"]},
-          "mapping_rule": {"type": "string", "description": "the full derivation from this source to the target column, composed across hops, as SQL/expression text"},
-          "mapping_business_rule": {"type": "string", "description": "one plain-English sentence a business analyst can read; no SQL keywords"},
-          "code_path": {"type": "string", "description": "repo-relative path of the most decisive expression for this source"},
-          "code_lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}
+          "id": {"type": "string"},
+          "schema": {"type": "string", "description": "empty for CTEs/DataFrames; catalog.schema where qualified"},
+          "table": {"type": "string"},
+          "column": {"type": "string", "description": "for literal/runtime nodes: the literal or expression text"},
+          "scope": {"type": "string", "description": "file / statement / cell / write-version that defines this state, e.g. repo/etl/load.sql:CREATE VOLATILE TABLE vt_sales (2nd write)"},
+          "source_type": {"type": "string", "enum": ["physical", "external", "view", "temp", "volatile", "cte", "dataframe", "file", "literal", "runtime", "unresolved"]},
+          "terminal": {"type": "string", "enum": ["expanded", "repo_boundary", "literal", "runtime", "unresolved"],
+            "description": "expanded: has upstream edges. repo_boundary: read but never written in this repo. literal/runtime: constant or CURRENT_DATE-like. unresolved: dead end."},
+          "boundary_reason": {"type": "string", "description": "why tracing stopped here (empty for expanded nodes)"},
+          "search_notes": {"type": "array", "items": {"type": "string"}, "description": "for repo_boundary: what you searched for and where, to show no producer exists"},
+          "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
         }
       }
     },
-    "hops": {
-      "description": "The chain you walked, target-side first. Lets a reviewer replay the trace.",
+    "edges": {
+      "description": "source node → the node it feeds, one hop. dependency_kind separates value inputs from row-selection context.",
       "type": "array",
       "items": {
-        "type": "object", "required": ["step", "object", "expression", "path", "lines"],
+        "type": "object",
+        "required": ["source_id", "target_id", "dependency_kind", "expression", "business_rule", "evidence"],
         "properties": {
-          "step": {"type": "integer"},
-          "object": {"type": "string", "description": "the object read at this hop (table/temp/CTE/DataFrame)"},
-          "column": {"type": "string"},
-          "expression": {"type": "string"},
-          "path": {"type": "string"},
-          "lines": {"type": "object", "required": ["start"], "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}}}
+          "source_id": {"type": "string"},
+          "target_id": {"type": "string"},
+          "dependency_kind": {"type": "string", "enum": ["value", "join", "filter", "group", "window", "order", "control"]},
+          "expression": {"type": "string", "description": "the immediate expression at this hop (or the predicate, for join/filter)"},
+          "business_rule": {"type": "string"},
+          "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+        }
+      }
+    },
+    "mappings": {
+      "description": "One entry per terminal VALUE source of the target column: the CSV rows. Sources reached only through join/filter/group/window/order/control edges are not mapped here; they are dependencies, not sources.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "mapping_rule", "mapping_business_rule", "evidence"],
+        "properties": {
+          "source_id": {"type": "string"},
+          "mapping_rule": {"type": "string", "description": "the full derivation from this source to the target column, composed across hops; row-selection context stated inline (e.g. 'where fx.is_current = 1')"},
+          "mapping_business_rule": {"type": "string", "description": "one plain-English sentence; no SQL keywords"},
+          "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
         }
       }
     },
     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
-    "unresolved_reason": {"type": ["string", "null"], "description": "set when any branch hit a dead end: what you looked for, where, and why it stopped"}
+    "unresolved": {"type": "array", "items": {"type": "string"}, "description": "one line per dead end: what you looked for, where, and what stopped you"}
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object", "required": ["path", "start_line", "end_line", "quote"],
+      "properties": {
+        "path": {"type": "string", "description": "repo-relative, starting with repo/"},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "quote": {"type": "string", "description": "verbatim text that occurs within those lines — the harness checks it"}
+      }
+    }
   }
 }

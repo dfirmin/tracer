@@ -27,6 +27,10 @@ The authoritative list is the final writer's projection: the INSERT column list 
 
 A placeholder resolves from, in order: a variable set in the same file; a config file the file reads (look for `load(`, `open(`, `yaml`, `json`, `configparser`, `dbutils.widgets`, `getArgument`, `os.environ`); a job/DAG definition that passes it in. Record the resolved value with its location. Environment-specific values (dev/prod) are all recorded; the run does not pick one.
 
+## Citing what you found
+
+Evidence is path + line range + verbatim quote. For notebooks, cite the raw file as committed (`.ipynb` JSON, `.py` with `# COMMAND ----------` markers, `.sql` with cell magics) at its real line numbers — never a cell number or a reconstructed SQL file. Keep quotes short and exact: a distinctive fragment of the line, whitespace as written.
+
 ## Completion
 
 You are done when: every writer of the target has been read and listed; the column list is exhaustive, ordered, and every column has a read location; every object the writer reads is in the object index with a definition location or an `external`/`physical` mark; every placeholder is resolved or recorded as unresolved. Anything short of that is *fog* — name it in `notes` rather than fill it in.

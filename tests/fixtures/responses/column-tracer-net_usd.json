@@ -1,0 +1,330 @@
+{
+ "target_column": "net_usd",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "mart",
+   "table": "daily_sales",
+   "column": "net_usd",
+   "scope": "02_target.sql",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "s.net_amount * fx.rate AS net_usd"
+    }
+   ]
+  },
+  {
+   "id": "vt_net",
+   "schema": "",
+   "table": "vt_sales",
+   "column": "net_amount",
+   "scope": "01_stage.sql first write",
+   "source_type": "volatile",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "o.amount - COALESCE(o.discount, 0) AS net_amount"
+    }
+   ]
+  },
+  {
+   "id": "fx_rate",
+   "schema": "raw",
+   "table": "exchange_rates",
+   "column": "rate",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; no writer in repo",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "fx.rate"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "fx_cur",
+   "schema": "raw",
+   "table": "exchange_rates",
+   "column": "is_current",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "WHERE fx.is_current = 1"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "c_currency",
+   "schema": "raw",
+   "table": "customers",
+   "column": "currency",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 7,
+     "end_line": 7,
+     "quote": "ON c.currency = fx.currency"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "o_amount",
+   "schema": "raw",
+   "table": "orders",
+   "column": "amount",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "o.amount"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "o_discount",
+   "schema": "raw",
+   "table": "orders",
+   "column": "discount",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "COALESCE(o.discount, 0)"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  },
+  {
+   "id": "o_status",
+   "schema": "raw",
+   "table": "orders",
+   "column": "status",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 6,
+     "end_line": 6,
+     "quote": "WHERE o.status = 'PAID'"
+    }
+   ],
+   "search_notes": [
+    "rg -n 'raw\\.orders' repo/ \u2014 only read sites",
+    "no CREATE/INSERT for raw.orders in repo"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "vt_net",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "s.net_amount * fx.rate",
+   "business_rule": "Net amount times exchange rate.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "s.net_amount * fx.rate"
+    }
+   ]
+  },
+  {
+   "source_id": "fx_rate",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "s.net_amount * fx.rate",
+   "business_rule": "Exchange rate multiplied into the net amount.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "fx.rate"
+    }
+   ]
+  },
+  {
+   "source_id": "fx_cur",
+   "target_id": "root",
+   "dependency_kind": "filter",
+   "expression": "fx.is_current = 1",
+   "business_rule": "Only the current exchange rate row is used.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "fx.is_current = 1"
+    }
+   ]
+  },
+  {
+   "source_id": "c_currency",
+   "target_id": "root",
+   "dependency_kind": "join",
+   "expression": "c.currency = fx.currency",
+   "business_rule": "The customer's currency selects the exchange rate.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 7,
+     "end_line": 7,
+     "quote": "c.currency = fx.currency"
+    }
+   ]
+  },
+  {
+   "source_id": "o_amount",
+   "target_id": "vt_net",
+   "dependency_kind": "value",
+   "expression": "o.amount - COALESCE(o.discount, 0)",
+   "business_rule": "Order amount less discount.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "o.amount - COALESCE(o.discount, 0)"
+    }
+   ]
+  },
+  {
+   "source_id": "o_discount",
+   "target_id": "vt_net",
+   "dependency_kind": "value",
+   "expression": "o.amount - COALESCE(o.discount, 0)",
+   "business_rule": "Discount subtracted; missing discount counts as zero.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "COALESCE(o.discount, 0)"
+    }
+   ]
+  },
+  {
+   "source_id": "o_status",
+   "target_id": "vt_net",
+   "dependency_kind": "filter",
+   "expression": "o.status = 'PAID'",
+   "business_rule": "Only paid orders are staged.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 6,
+     "end_line": 6,
+     "quote": "o.status = 'PAID'"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "o_amount",
+   "mapping_rule": "(o.amount - COALESCE(o.discount, 0)) * fx.rate where o.status = 'PAID' and fx.is_current = 1",
+   "mapping_business_rule": "Paid order amount less discount, converted to USD with the customer's current exchange rate.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "o.amount"
+    },
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "s.net_amount * fx.rate"
+    }
+   ]
+  },
+  {
+   "source_id": "o_discount",
+   "mapping_rule": "(o.amount - COALESCE(o.discount, 0)) * fx.rate where o.status = 'PAID' and fx.is_current = 1",
+   "mapping_business_rule": "Discount subtracted from the paid order amount before conversion; a missing discount is treated as zero.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/01_stage.sql",
+     "start_line": 4,
+     "end_line": 4,
+     "quote": "COALESCE(o.discount, 0)"
+    }
+   ]
+  },
+  {
+   "source_id": "fx_rate",
+   "mapping_rule": "(o.amount - COALESCE(o.discount, 0)) * fx.rate where fx.is_current = 1",
+   "mapping_business_rule": "Current exchange rate for the customer's currency, multiplied against the net order amount.",
+   "evidence": [
+    {
+     "path": "repo/examples/etl/02_target.sql",
+     "start_line": 3,
+     "end_line": 3,
+     "quote": "fx.rate"
+    }
+   ]
+  }
+ ]
+}

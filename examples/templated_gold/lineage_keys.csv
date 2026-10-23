@@ -1,0 +1,12 @@
+Target Column,Source Schema,Source Table,Source Column,Source Type
+claim_id,RAW_CLAIMS,claim,claim_id,physical
+claim_id,EDW,claim_fact_hist,claim_id,physical
+policy_number,RAW_CLAIMS,policy,policy_number,physical
+policy_number,EDW,claim_fact_hist,policy_number,physical
+line_of_business,RAW_CLAIMS,policy,lob_cd,physical
+line_of_business,EDW,claim_fact_hist,line_of_business,physical
+paid_amount,RAW_CLAIMS,claim_line,line_amt,physical
+paid_amount,EDW,claim_fact_hist,paid_amount,physical
+paid_amount,RAW_CLAIMS,claim_adjustment,adj_amount,physical
+load_dt,,,,runtime
+load_dt,EDW,claim_fact_hist,load_dt,physical

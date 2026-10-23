@@ -1,0 +1,4 @@
+Nightly claims schedule (on-prem scheduler, prod)
+02:00  edge node   scripts/run_stage.sh prod          Teradata staging -> STG.claim_line_stg
+03:00  Databricks  job claim_fact_nightly              load_claim_fact, then apply_adjustments
+Ad hoc Databricks  job backfill_claim_fact             historical rows before 2024-01-01
