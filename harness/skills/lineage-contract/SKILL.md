@@ -32,4 +32,6 @@ Dependency edges (join, filter, group, window, order, control) never become rows
 - `scope` on a node is free text but specific: file, statement or cell, and write number when the name is reused.
 - `unresolved` lines say what you looked for, where, and what stopped you — enough for a human to finish the hop.
 - `notes` in the manifest is for tracers: gotchas, ordering, dead ends already hit. Not a summary of the repo.
+- `statements[]` in the manifest: one entry per statement that writes the target or a direct-input intermediate — `id` (short, file-name safe), the **whole** statement's `path`/`start_line`/`end_line`, a `quote` from it, `writes` (the object, as written), `write_kind`, and when known `role`, `execution_order`, `context`. The harness copies each span into `excerpts/<id>.txt` and into tracer prompts.
+- `columns[].assignments[]`: every statement that assigns the column, in execution order, each with `statement_id` and evidence **inside that statement's span**. One entry is the common case; several when an INSERT is followed by an UPDATE/MERGE or full and incremental paths both write the column. Never drop one to keep it simple.
 - A review's `issues` are specific and cited: path, what is missing or contradicted, what you saw instead.

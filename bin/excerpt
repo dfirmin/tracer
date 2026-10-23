@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""excerpt — copy manifest statement spans out of the repo, and build one column's focused context.
+
+    excerpt build  <run_dir> [--work DIR]          write <run>/excerpts/<statement_id>.txt for every statement
+    excerpt column <run_dir> <column> [--work DIR] print the context block trace-one puts in that column's prompt
+
+No model and no SQL interpretation: `build` copies the exact lines the conductor cited, keeping
+the original line numbers so tracers cite the repo file, never the excerpt. `column` assembles
+what the manifest already says about one column — its assignments in execution order with their
+statement text, the object_index entries and templating bindings whose names occur in that text
+(a plain substring search, used to choose what to show, never as lineage), and the conductor's
+notes. A statement longer than LINEAGE_EXCERPT_MAX_LINES is referenced by path instead of inlined.
+"""
+import argparse, json, os, re, sys
+from pathlib import Path
+
+MAX_LINES = int(os.environ.get("LINEAGE_EXCERPT_MAX_LINES", "300"))
+
+
+def statement_lines(work, s):
+    lines = (work / s["path"]).read_text(encoding="utf-8", errors="replace").splitlines()
+    a, b = s["start_line"], min(s["end_line"], len(lines))
+    return [(n, lines[n - 1]) for n in range(a, b + 1)]
+
+
+def render(s, numbered):
+    head = f"-- {s['path']} lines {s['start_line']}-{s['end_line']} · statement {s['id']} ({s['write_kind']} → {s['writes']})"
+    width = len(str(s["end_line"]))
+    return "\n".join([head] + [f"{n:>{width}} | {text}" for n, text in numbered]) + "\n"
+
+
+def build(run, work):
+    manifest = json.loads((run / "manifest.json").read_text())
+    out = run / "excerpts"
+    out.mkdir(exist_ok=True)
+    for s in manifest.get("statements", []):
+        (out / f"{s['id']}.txt").write_text(render(s, statement_lines(work, s)))
+    print(f"excerpts: {len(manifest.get('statements', []))} statement(s) → {out}")
+
+
+def mentions(text, name):
+    if not name:
+        return False
+    bare = re.sub(r"[{}$\s]", "", name)
+    pat = r"(?<![A-Za-z0-9_])" + re.escape(bare) + r"(?![A-Za-z0-9_])"
+    return re.search(pat, text, re.I) is not None or name in text
+
+
+def column(run, work, name):
+    manifest = json.loads((run / "manifest.json").read_text())
+    cols = manifest["columns"]
+    col = next((c for c in cols if c["name"] == name), None)
+    if col is None:
+        sys.exit(f"excerpt: column {name!r} not in manifest")
+    stmts = {s["id"]: s for s in manifest.get("statements", [])}
+    assigns = sorted(col.get("assignments", []), key=lambda a: stmts.get(a["statement_id"], {}).get("execution_order") or 0)
+
+    out = ["", "Column context — copied from the manifest by the harness. Statement text is verbatim with the",
+           "repo file's own line numbers: cite repo/ paths and those numbers, never the excerpt.", "",
+           f"Column: {col['name']} (ordinal {col['ordinal']} of {len(cols)})" + (f" — {col['expression']}" if col.get("expression") else ""),
+           f"Assigned by {len(assigns)} statement(s), in execution order:"]
+    texts = []
+    for a in assigns:
+        s = stmts[a["statement_id"]]
+        ev = a["evidence"][0]
+        meta = ", ".join(x for x in (s.get("role"), s.get("context") and f"runs when: {s['context']}",
+                                     s.get("execution_order") and f"order {s['execution_order']}") if x)
+        out.append(f"- [{s['id']}] {s['write_kind']} → {s['writes']}" + (f" ({meta})" if meta else "")
+                   + f"; this column at {ev['path']}:{ev['start_line']}-{ev['end_line']}")
+        numbered = statement_lines(work, s)
+        text = "\n".join(t for _, t in numbered)
+        texts.append(text)
+        if len(numbered) <= MAX_LINES:
+            out += ["```", render(s, numbered).rstrip("\n"), "```"]
+        else:
+            out.append(f"  ({len(numbered)} lines — too long to inline; read {run / 'excerpts' / (s['id'] + '.txt')})")
+    every = "\n".join(texts)
+
+    objs = [o for o in manifest.get("object_index", []) if mentions(every, o.get("name"))]
+    if objs:
+        out.append("Objects these statements name (object_index — start each hop here):")
+        for o in objs:
+            ev = (o.get("evidence") or [{}])[0]
+            loc = f"{ev.get('path')}:{ev.get('start_line')}-{ev.get('end_line')}" if ev else "location not indexed"
+            producers = [s for s in stmts.values() if s.get("writes", "").casefold() == o["name"].casefold()]
+            via = "; written by " + ", ".join(f"[{s['id']}] → {run / 'excerpts' / (s['id'] + '.txt')}" for s in producers) if producers else ""
+            out.append(f"- {o['name']} ({o['kind']}) at {loc}" + (f" [scope: {o['scope']}]" if o.get("scope") else "")
+                       + via + (f" — {o['note']}" if o.get("note") else ""))
+    binds = [b for b in manifest.get("templating", []) if mentions(every, b.get("placeholder"))]
+    if binds:
+        out.append("Bindings used in these statements (templating):")
+        for b in binds:
+            ev = (b.get("evidence") or [{}])[0]
+            out.append(f"- {b.get('placeholder')} → {b.get('resolved_to')}" + (f" ({ev.get('path')}:{ev.get('start_line')})" if ev else ""))
+    if manifest.get("notes"):
+        out.append(f"Conductor notes: {manifest['notes']}")
+    print("\n".join(out))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("mode", choices=["build", "column"])
+    ap.add_argument("run_dir")
+    ap.add_argument("column", nargs="?")
+    ap.add_argument("--work", default=os.environ.get("WORK", "/work"))
+    a = ap.parse_args()
+    run, work = Path(a.run_dir), Path(a.work)
+    if a.mode == "build":
+        build(run, work)
+    else:
+        if not a.column:
+            ap.error("column mode needs a column name")
+        column(run, work, a.column)
+
+
+if __name__ == "__main__":
+    main()

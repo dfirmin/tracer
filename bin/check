@@ -55,7 +55,7 @@ def check_evidence(items, work, where, p):
 
 # ---- manifest -------------------------------------------------------------------------------
 def check_manifest(m, work, p):
-    for k in ("target", "build_sites", "columns", "object_index", "enumeration_complete"):
+    for k in ("target", "build_sites", "statements", "columns", "object_index", "enumeration_complete"):
         if k not in m:
             p.add(f"manifest: missing '{k}'")
     if p:
@@ -75,6 +75,40 @@ def check_manifest(m, work, p):
         check_evidence(c.get("evidence"), work, f"column {c.get('name')}", p)
     for o in m["object_index"]:
         check_evidence(o.get("evidence"), work, f"object {o.get('name')}", p)
+    check_statements(m, work, p)
+
+
+def check_statements(m, work, p):
+    """statements[] are real spans; every column is assigned by at least one of them, inside its span."""
+    stmts = {}
+    for i, s in enumerate(m.get("statements") or []):
+        sid = s.get("id") or ""
+        if not sid:
+            p.add(f"statements[{i}]: missing id")
+            continue
+        if sid in stmts:
+            p.add(f"statements: duplicate id {sid}")
+        stmts[sid] = s
+        check_evidence([{k: s.get(k) for k in ("path", "start_line", "end_line", "quote")}], work, f"statement {sid}", p)
+    if not stmts:
+        p.add("manifest.statements: empty — list every statement that writes the target, with its full span")
+    for c in m["columns"]:
+        name = c.get("name")
+        assigns = c.get("assignments") or []
+        if not assigns:
+            p.add(f"column {name}: no assignments — cite each statement that writes it")
+        for j, a in enumerate(assigns):
+            sid = a.get("statement_id")
+            s = stmts.get(sid)
+            if s is None:
+                p.add(f"column {name}.assignments[{j}]: unknown statement_id {sid!r}")
+                continue
+            check_evidence(a.get("evidence"), work, f"column {name}.assignments[{j}]", p)
+            for e in a.get("evidence") or []:
+                if e.get("path") != s.get("path") or not (s.get("start_line", 0) <= e.get("start_line", 0)
+                                                          and e.get("end_line", 0) <= s.get("end_line", 0)):
+                    p.add(f"column {name}.assignments[{j}]: evidence {e.get('path')}:{e.get('start_line')}-{e.get('end_line')} "
+                          f"is outside statement {sid} ({s.get('path')}:{s.get('start_line')}-{s.get('end_line')})")
 
 
 # ---- finding --------------------------------------------------------------------------------

@@ -69,10 +69,14 @@ Re-running with `--run <same name>` skips the manifest, every column with a vali
 bin/tracer
  ├─ 0 workspace  clone or use mounted repo; require clean tree; record sha            → run.json
  ├─ 1 discover   claude -p --agent conductor   ──▶ check manifest                     → manifest.json
- ├─ 2 trace      N × claude -p --agent column-tracer ──▶ check finding (retry w/ feedback) → findings/<col>.json
+ │              excerpt build: copy each manifest statement verbatim (no model)          → excerpts/<stmt>.txt
+ ├─ 2 trace      N × claude -p --agent column-tracer, prompt carries that column's statements
+ │              ──▶ check finding (retry w/ feedback)                                  → findings/<col>.json
  ├─ 3 review     claude -p --agent lineage-reviewer for selected columns; one repair if rejected → reviews/<col>.json
  └─ 4 assemble   assemble.py                                                           → lineage.csv, dependencies.csv, gaps.md, report.json
 ```
+
+The conductor lists every statement that writes the target or a direct-input intermediate (`statements[]`, full span) and, per column, every statement that assigns it (`columns[].assignments[]` — several when an INSERT is followed by an UPDATE/MERGE or full and incremental paths both write it). `bin/excerpt` copies those spans out of the repo with the file's own line numbers, and each tracer's prompt carries its column's assignments verbatim plus the indexed objects and bindings those statements use, so a tracer starts at hop one instead of rediscovering the build site. Statements over `LINEAGE_EXCERPT_MAX_LINES` (300) are referenced by path instead of inlined.
 
 Stages talk only through files. Every session uses `--json-schema` so the agent's final answer is validated structured output. `bin/check` then re-opens each cited file and rejects the answer if the quoted text is not at the cited lines, or if the graph is malformed (cycle, orphan node, terminal with upstream edges, a value source with no mapping, a join/filter column mapped as a source). Rejections go back to the agent as feedback on the retry.
 
@@ -87,8 +91,8 @@ harness/                    copied to /work — the Claude Code project the agen
   skills/lineage-tracing    the hop discipline: value vs dependency, scope, boundaries, fan-in, mapping composition, confidence
   skills/lineage-contract   what each output field means
 schemas/                    manifest, finding, review JSON Schema (the --json-schema contracts)
-bin/                        tracer, trace-one, review-one, lib/session.sh, check, budget, assemble.py
-tests/                      fake claude + 16 tests   (python3 -m unittest discover -s tests -v)
+bin/                        tracer, trace-one, review-one, lib/session.sh, check, excerpt, budget, assemble.py, metrics
+tests/                      fake claude + unit/pipeline tests   (python3 -m unittest discover -s tests -v)
 examples/etl/               two-file Teradata fixture (mart.daily_sales) used by the tests and the first live smoke test
 docs/evaluation.md          the three gates before trusting output
 ```

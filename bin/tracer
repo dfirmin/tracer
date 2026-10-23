@@ -21,6 +21,7 @@
 #   lineage.csv          the deliverable (lineage.partial.csv when any column has a gap)
 #   dependencies.csv     join/filter/group/window/order/control inputs, deduplicated per target table
 #   gaps.md, report.json, budget.json, logs/
+#   excerpts/<stmt>.txt  each manifest statement copied verbatim with original line numbers (no model)
 #   attempts.jsonl, timeline.jsonl, metrics.json   per-call and per-stage telemetry (bin/metrics)
 set -euo pipefail
 
@@ -138,6 +139,7 @@ Fan-out mode: subagent. After the manifest is written, dispatch column-tracer fo
     || { stage discover end; echo "conductor produced no valid manifest; see $RUN_DIR/logs/discover.*" >&2; exit 1; }
 fi
 stage discover end
+python3 "$LINEAGE_HOME/bin/excerpt" build "$RUN_DIR" --work "$WORK"      # deterministic; rebuilt every invocation
 N=$(jq '.columns | length' "$RUN_DIR/manifest.json")
 echo "manifest: $N columns, enumeration_complete=$(jq -r .enumeration_complete "$RUN_DIR/manifest.json"), build site(s): $(jq -r '[.build_sites[].evidence[0].path] | unique | join(", ")' "$RUN_DIR/manifest.json")"
 

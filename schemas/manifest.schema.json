@@ -5,6 +5,7 @@
   "required": [
     "target",
     "build_sites",
+    "statements",
     "columns",
     "object_index",
     "enumeration_complete"
@@ -64,6 +65,77 @@
         }
       }
     },
+    "statements": {
+      "description": "Every statement that writes the target or an intermediate object its columns are assigned from, with its exact span. The harness copies each span verbatim (original line numbers) into excerpts/ for tracers, so the span must cover the whole statement: target list, SELECT list, FROM/JOIN, WHERE/QUALIFY/GROUP BY.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "path",
+          "start_line",
+          "end_line",
+          "quote",
+          "writes",
+          "write_kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "description": "short stable id, e.g. s1_stage_vt_sales; used as a file name"
+          },
+          "path": {
+            "type": "string",
+            "description": "repo-relative, starts with repo/"
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "quote": {
+            "type": "string",
+            "description": "verbatim text within the span, e.g. the statement's first line \u2014 the harness checks it"
+          },
+          "writes": {
+            "type": "string",
+            "description": "the object this statement writes, as written (templated names as the template)"
+          },
+          "write_kind": {
+            "type": "string",
+            "enum": [
+              "create_table_as",
+              "insert",
+              "update",
+              "merge",
+              "delete_insert",
+              "create_view",
+              "create_temp",
+              "save_as_table",
+              "dataframe",
+              "other"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "description": "e.g. full load, incremental path, backfill, staging"
+          },
+          "execution_order": {
+            "type": "integer",
+            "description": "position in the run order when known (1 = first)"
+          },
+          "context": {
+            "type": "string",
+            "description": "job / environment / condition under which this statement runs, when not every run"
+          }
+        }
+      }
+    },
     "columns": {
       "description": "Every column of the target, in the target's own order. Exhaustive.",
       "type": "array",
@@ -73,7 +145,8 @@
         "required": [
           "name",
           "ordinal",
-          "evidence"
+          "evidence",
+          "assignments"
         ],
         "properties": {
           "name": {
@@ -92,6 +165,36 @@
               "$ref": "#/$defs/evidence"
             },
             "description": "where this column's output expression is written"
+          },
+          "assignments": {
+            "description": "Every statement that assigns this column, in execution order: one for a single full load; several when an INSERT is followed by an UPDATE/MERGE, or full and incremental paths both write it. Never collapse to one when more apply.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "statement_id",
+                "evidence"
+              ],
+              "properties": {
+                "statement_id": {
+                  "type": "string",
+                  "description": "a statements[].id"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "the assigned expression as written, if short"
+                },
+                "evidence": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/evidence"
+                  },
+                  "description": "the assignment within that statement's span"
+                }
+              }
+            }
           }
         }
       }

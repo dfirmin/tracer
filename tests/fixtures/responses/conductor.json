@@ -18,6 +18,30 @@
    ]
   }
  ],
+ "statements": [
+  {
+   "id": "s1_vt_sales",
+   "path": "repo/examples/etl/01_stage.sql",
+   "start_line": 1,
+   "end_line": 7,
+   "quote": "CREATE VOLATILE TABLE vt_sales AS",
+   "writes": "vt_sales",
+   "write_kind": "create_temp",
+   "role": "staging",
+   "execution_order": 1
+  },
+  {
+   "id": "s2_daily_sales",
+   "path": "repo/examples/etl/02_target.sql",
+   "start_line": 1,
+   "end_line": 9,
+   "quote": "CREATE TABLE mart.daily_sales AS",
+   "writes": "mart.daily_sales",
+   "write_kind": "create_table_as",
+   "role": "full load",
+   "execution_order": 2
+  }
+ ],
  "columns": [
   {
    "name": "order_id",
@@ -29,6 +53,20 @@
      "start_line": 2,
      "end_line": 2,
      "quote": "s.order_id"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_daily_sales",
+     "expression": "s.order_id",
+     "evidence": [
+      {
+       "path": "repo/examples/etl/02_target.sql",
+       "start_line": 2,
+       "end_line": 2,
+       "quote": "s.order_id"
+      }
+     ]
     }
    ]
   },
@@ -43,6 +81,20 @@
      "end_line": 3,
      "quote": "s.net_amount * fx.rate AS net_usd"
     }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_daily_sales",
+     "expression": "s.net_amount * fx.rate",
+     "evidence": [
+      {
+       "path": "repo/examples/etl/02_target.sql",
+       "start_line": 3,
+       "end_line": 3,
+       "quote": "s.net_amount * fx.rate AS net_usd"
+      }
+     ]
+    }
    ]
   },
   {
@@ -55,6 +107,20 @@
      "start_line": 4,
      "end_line": 4,
      "quote": "COALESCE(c.segment, 'UNKNOWN') AS segment"
+    }
+   ],
+   "assignments": [
+    {
+     "statement_id": "s2_daily_sales",
+     "expression": "COALESCE(c.segment, 'UNKNOWN')",
+     "evidence": [
+      {
+       "path": "repo/examples/etl/02_target.sql",
+       "start_line": 4,
+       "end_line": 4,
+       "quote": "COALESCE(c.segment, 'UNKNOWN') AS segment"
+      }
+     ]
     }
    ]
   }

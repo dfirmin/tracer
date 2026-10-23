@@ -515,5 +515,95 @@ class CheckTests(unittest.TestCase):
         self.assertIn("search_notes", out)
 
 
+class StatementTests(unittest.TestCase):
+    """Delivery 1.4: statements and assignments in the manifest; harness-built excerpts and focused prompts."""
+
+    def setUp(self):
+        self.r = Run()
+        self.addCleanup(self.r.close)
+        self.manifest = json.loads((ROOT / "tests" / "fixtures" / "responses" / "conductor.json").read_text())
+
+    def check(self, m):
+        f = self.r.tmp / "m.json"
+        f.write_text(json.dumps(m))
+        p = subprocess.run([str(ROOT / "bin" / "check"), "manifest", str(f), "--work", str(self.r.work)], capture_output=True, text=True)
+        return p.returncode, p.stdout
+
+    def bad(self):
+        return json.loads(json.dumps(self.manifest))
+
+    def test_fixture_manifest_passes(self):
+        self.assertEqual(self.check(self.manifest), (0, ""))
+
+    def test_statements_are_required_and_spans_are_checked(self):
+        m = self.bad(); del m["statements"]
+        self.assertIn("missing 'statements'", self.check(m)[1])
+        m = self.bad(); m["statements"][1]["quote"] = "INSERT INTO nowhere"
+        self.assertIn("statement s2_daily_sales", self.check(m)[1])
+        m = self.bad(); m["statements"][1]["end_line"] = 99
+        self.assertIn("outside", self.check(m)[1])
+        m = self.bad(); m["statements"].append(dict(m["statements"][0]))
+        self.assertIn("duplicate id", self.check(m)[1])
+
+    def test_every_column_needs_an_assignment_inside_its_statement(self):
+        m = self.bad(); m["columns"][0]["assignments"] = []
+        self.assertIn("column order_id: no assignments", self.check(m)[1])
+        m = self.bad(); m["columns"][0]["assignments"][0]["statement_id"] = "nope"
+        self.assertIn("unknown statement_id", self.check(m)[1])
+        m = self.bad(); m["columns"][1]["assignments"][0]["statement_id"] = "s1_vt_sales"   # evidence is in 02_target.sql
+        self.assertIn("is outside statement s1_vt_sales", self.check(m)[1])
+
+    def test_run_writes_excerpts_with_original_line_numbers(self):
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        ex = (self.r.run_dir / "excerpts" / "s2_daily_sales.txt").read_text().splitlines()
+        self.assertEqual(ex[0], "-- repo/examples/etl/02_target.sql lines 1-9 · statement s2_daily_sales (create_table_as → mart.daily_sales)")
+        self.assertEqual(ex[3], "3 |          s.net_amount * fx.rate AS net_usd,")
+        self.assertEqual(len(ex), 10)
+        self.assertTrue((self.r.run_dir / "excerpts" / "s1_vt_sales.txt").exists())
+
+    def test_tracer_prompt_carries_statement_text_and_only_relevant_context(self):
+        self.r.tracer()
+        prompt = [json.loads(l)["prompt"] for l in self.r.log.read_text().splitlines() if json.loads(l)["key"] == "column-tracer-net_usd"][0]
+        self.assertIn("Column: net_usd (ordinal 2 of 3) — s.net_amount * fx.rate", prompt)
+        self.assertIn("3 |          s.net_amount * fx.rate AS net_usd,", prompt)
+        self.assertIn("8 |   WHERE fx.is_current = 1", prompt)                         # row selection travels with it
+        self.assertIn("- vt_sales (volatile)", prompt)
+        self.assertIn("written by [s1_vt_sales]", prompt)
+        self.assertIn("raw.exchange_rates (physical)", prompt)
+        self.assertNotIn("raw.orders", prompt)                                         # not named by this statement
+        self.assertIn("Conductor notes:", prompt)
+        self.assertLess(prompt.index("Column context"), prompt.index("Trace this column"))
+
+    def test_long_statement_is_referenced_not_inlined(self):
+        self.r.env["LINEAGE_EXCERPT_MAX_LINES"] = "5"
+        self.r.tracer()
+        prompt = [json.loads(l)["prompt"] for l in self.r.log.read_text().splitlines() if json.loads(l)["key"] == "column-tracer-net_usd"][0]
+        self.assertIn("(9 lines — too long to inline; read", prompt)
+        self.assertNotIn("8 |   WHERE fx.is_current = 1", prompt)
+
+    def test_multiple_assignments_are_all_shown_in_execution_order(self):
+        repo = self.r.work / "repo"
+        (repo / "examples" / "etl" / "03_fix.sql").write_text("UPDATE mart.daily_sales\nSET segment = 'RETAIL'\nWHERE segment = 'UNKNOWN';\n")
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "upd"], cwd=repo, check=True)
+        m = self.bad()
+        m["statements"].append({"id": "s3_fix_segment", "path": "repo/examples/etl/03_fix.sql", "start_line": 1, "end_line": 3,
+                                "quote": "UPDATE mart.daily_sales", "writes": "mart.daily_sales", "write_kind": "update",
+                                "role": "post-load correction", "execution_order": 3})
+        seg = m["columns"][2]
+        seg["assignments"].append({"statement_id": "s3_fix_segment", "expression": "'RETAIL'",
+                                   "evidence": [{"path": "repo/examples/etl/03_fix.sql", "start_line": 2, "end_line": 2, "quote": "SET segment = 'RETAIL'"}]})
+        seg["assignments"].reverse()                                                     # out of order on purpose
+        self.assertEqual(self.check(m), (0, ""))
+        self.r.responses(conductor=m)
+        self.r.tracer()
+        prompt = [json.loads(l)["prompt"] for l in self.r.log.read_text().splitlines() if json.loads(l)["key"] == "column-tracer-segment"][0]
+        self.assertIn("Assigned by 2 statement(s), in execution order:", prompt)
+        self.assertLess(prompt.index("[s2_daily_sales]"), prompt.index("[s3_fix_segment]"))
+        self.assertIn("update → mart.daily_sales (post-load correction, order 3)", prompt)
+        self.assertIn("2 | SET segment = 'RETAIL'", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
