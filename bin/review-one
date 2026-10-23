@@ -34,7 +34,7 @@ PROMPT="Target: $TARGET
 Column: $COL
 Manifest: $RUN_DIR/manifest.json
 Finding to review: $FINDING
-Verify the finding against the source and return the review."
+Verify the finding against the source and return the review.$(inputs_prompt)"
 PROMPT_REVIEW="$PROMPT"
 run_session "review-$SAFE" lineage-reviewer "$LINEAGE_REVIEWER_MODEL" "$LINEAGE_HOME/schemas/review.schema.json" review "$COL" "$PROMPT" "$REVIEW" || exit 0
 stamp
@@ -48,7 +48,7 @@ Column: $COL
 Manifest: $RUN_DIR/manifest.json
 Your earlier finding is at $RUN_DIR/findings/$SAFE.rejected.json. An independent reviewer rejected it with these issues:
 $(jq -r '.issues[] | "- " + .' "$REVIEW")
-Re-read the cited source, fix every issue, and return the corrected finding."
+Re-read the cited source, fix every issue, and return the corrected finding.$(inputs_prompt)"
   if run_session "repair-$SAFE" column-tracer "$LINEAGE_TRACER_MODEL" "$LINEAGE_HOME/schemas/finding.schema.json" finding "$COL" "$PROMPT" "$FINDING.repaired"; then
     mv "$FINDING.repaired" "$FINDING"
     mv "$REVIEW" "$RUN_DIR/reviews/$SAFE.first.json"

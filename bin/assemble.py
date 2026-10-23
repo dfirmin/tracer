@@ -42,7 +42,7 @@ def safe(name):
 # A run is complete only when every reason below is zero and the conductor enumerated every
 # column. Each reason is counted separately in report.json so a partial run says why.
 REASONS = ("missing", "failed", "unresolved", "low_confidence",
-           "review_rejected", "review_stale", "review_missing")
+           "review_rejected", "review_stale", "review_missing", "expected_columns_mismatch")
 reasons = {r: 0 for r in REASONS}
 review_policy = meta.get("review", "none")
 
@@ -143,6 +143,23 @@ for col in manifest["columns"]:
         })
 
 enumeration_complete = manifest.get("enumeration_complete") is True
+
+# --columns cross-check: an independent expected list; a disagreement is reported and blocks
+# completeness, but never adds a column (the manifest's list is what the code evidences).
+expected_columns = None
+exp_path = run / "inputs" / "columns.json"
+if exp_path.exists():
+    expected = json.loads(exp_path.read_text())
+    got = [c["name"] for c in manifest["columns"]]
+    fold = lambda xs: [x.casefold() for x in xs]  # warehouse identifiers compare case-insensitively
+    missing_cols = [x for x in expected if x.casefold() not in fold(got)]
+    unexpected = [x for x in got if x.casefold() not in fold(expected)]
+    common_got = [x for x in fold(got) if x in fold(expected)]
+    common_exp = [x for x in fold(expected) if x in fold(got)]
+    expected_columns = {"provided": len(expected), "missing_from_manifest": missing_cols,
+                        "not_in_expected": unexpected, "order_matches": common_got == common_exp}
+    if missing_cols or unexpected or not expected_columns["order_matches"]:
+        reasons["expected_columns_mismatch"] = 1
 complete = enumeration_complete and not any(reasons.values())
 suffix = "" if complete else ".partial"
 for name in ("lineage.csv", "lineage.partial.csv"):
@@ -158,6 +175,10 @@ lines = [f"# Gaps — {tgt['schema']}.{tgt['name']}", "",
          f"Columns: {len(manifest['columns'])}  Rows: {len(rows)}  Gaps: {len(gaps)}  Missing findings: {len(missing)}", ""]
 if not enumeration_complete:
     lines += ["- **(enumeration)**: the conductor did not confirm that every target column is listed", ""]
+if expected_columns and reasons["expected_columns_mismatch"]:
+    e = expected_columns
+    lines += [f"- **(expected columns)**: --columns disagrees with the manifest — missing {e['missing_from_manifest'] or 'none'}, "
+              f"not expected {e['not_in_expected'] or 'none'}, order {'matches' if e['order_matches'] else 'differs'}", ""]
 for name, conf, whys in gaps:
     lines.append(f"- **{name}** ({conf}):")
     lines.extend(f"  - {w}" for w in whys)
@@ -172,7 +193,9 @@ report = {"target": f"{tgt['schema']}.{tgt['name']}", "commit": meta.get("sha"),
           "complete": complete, "review_policy": review_policy,
           "incomplete_reasons": {**reasons, "enumeration_incomplete": not enumeration_complete},
           "column_count": len(manifest["columns"]), "row_count": len(rows), "dependency_count": len(deps),
-          "enumeration_complete": manifest.get("enumeration_complete"), "columns": coverage,
+          "enumeration_complete": manifest.get("enumeration_complete"), "expected_columns": expected_columns,
+          "inputs": sorted(p.name for p in (run / "inputs").glob("*")) if (run / "inputs").exists() else [],
+          "columns": coverage,
           "committed_spend_usd": round(spend, 4), "mapping_file": f"lineage{suffix}.csv"}
 (run / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 why = " ".join(f"{k}={v}" for k, v in report["incomplete_reasons"].items() if v)

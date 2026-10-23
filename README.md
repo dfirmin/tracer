@@ -18,6 +18,22 @@ docker compose run --rm tracer edw.claim_fact
 
 Or without compose: `docker run --rm -e ANTHROPIC_API_KEY -v $TARGET_WORKSPACE:/work/repo:ro -v $LINEAGE_OUTPUT:/work/.lineage tracer edw.claim_fact [--repo git@... --ref main] [--run name]`.
 
+### Run inputs (optional)
+
+| Flag | File | Use |
+|---|---|---|
+| `--notes` | Markdown | Where things live in this repo: loader directories, config layout, naming conventions. Defaults to `LINEAGE.md` at the repo root when present. Hints only — agents never cite them as evidence. |
+| `--context` | text | The execution context to trace under: job, environment, config selection, scope. Lets discovery skip alternatives that don't apply. |
+| `--columns` | JSON array | Expected target column names, as an independent cross-check. A mismatch (missing, extra, or reordered) makes the run partial with `expected_columns_mismatch`; it never adds a column. |
+
+All three are copied into `<run>/inputs/` and hashed into the run identity; on resume, omit them to reuse the recorded files, and a different file is refused. In Docker the files must be inside the container — the simplest place is the output mount: put them in `$LINEAGE_OUTPUT` and pass `--notes .lineage/notes.md`.
+
+```markdown
+<!-- LINEAGE.md -->
+Targets are declared in conf/tables.yaml; schemas come from conf/env/<stage>.yaml.
+Loaders live under jobs/; jobs/legacy/ is not scheduled.
+```
+
 Output in `out/<run>/`:
 
 | File | Meaning |

@@ -23,7 +23,7 @@ fi
 PROMPT="Target: $TARGET
 Column: $COL
 Manifest: $RUN_DIR/manifest.json
-Trace this column to its terminal sources and return the finding."
+Trace this column to its terminal sources and return the finding.$(inputs_prompt)"
 if run_session "trace-$SAFE" column-tracer "$LINEAGE_TRACER_MODEL" "$LINEAGE_HOME/schemas/finding.schema.json" finding "$COL" "$PROMPT" "$OUT"; then
   rm -f "$FAILED"
   echo "  ok   $COL ($(jq '.mappings | length' "$OUT") source(s), confidence $(jq -r .confidence "$OUT"))"

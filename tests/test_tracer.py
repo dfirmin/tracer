@@ -301,6 +301,91 @@ class CompletenessAndResumeTests(unittest.TestCase):
         self.assertIn("new --run", p.stderr)
 
 
+class RunInputsTests(unittest.TestCase):
+    """Delivery 1.3: --notes / --context / --columns reach the agents, are part of the run's
+    identity, and --columns only ever cross-checks enumeration."""
+
+    def setUp(self):
+        self.r = Run()
+        self.addCleanup(self.r.close)
+        self.files = self.r.tmp / "inputs"
+        self.files.mkdir()
+
+    def file(self, name, text):
+        f = self.files / name
+        f.write_text(text)
+        return str(f)
+
+    def prompts(self, key):
+        return [json.loads(l)["prompt"] for l in self.r.log.read_text().splitlines() if json.loads(l)["key"] == key]
+
+    def test_notes_and_context_reach_every_agent_and_are_recorded(self):
+        notes = self.file("notes.md", "Loaders live under examples/etl/.")
+        ctx = self.file("ctx.txt", "Job: nightly. Env: prod.")
+        p = self.r.tracer("--notes", notes, "--context", ctx)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        inputs = self.r.run_dir / "inputs"
+        self.assertEqual((inputs / "notes.md").read_text(), "Loaders live under examples/etl/.")
+        for key in ("conductor", "column-tracer-net_usd"):
+            prompt = self.prompts(key)[0]
+            self.assertIn(f"Repo notes: {inputs / 'notes.md'}".replace(str(self.r.work) + "/", ""), prompt)
+            self.assertIn("Never cite them as evidence", prompt)
+            self.assertIn("Execution context:", prompt)
+        self.assertNotIn("Expected columns:", self.prompts("conductor")[0])
+        ident = json.loads((self.r.run_dir / "run.json").read_text())["identity"]
+        self.assertNotEqual(ident["notes"], "none")
+        self.assertNotEqual(ident["context"], "none")
+        self.assertEqual(ident["expected_columns"], "none")
+        self.assertEqual(self.r.report()["inputs"], ["context.txt", "notes.md"])
+
+    def test_repo_lineage_md_is_used_as_notes(self):
+        repo = self.r.work / "repo"
+        (repo / "LINEAGE.md").write_text("Targets are built by examples/etl/02_target.sql.")
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "notes"], cwd=repo, check=True)
+        self.r.tracer()
+        self.assertIn("02_target.sql", (self.r.run_dir / "inputs" / "notes.md").read_text())
+        self.assertIn("Repo notes:", self.prompts("conductor")[0])
+
+    def test_resume_reuses_recorded_inputs_and_refuses_changed_ones(self):
+        ctx = self.file("ctx.txt", "Env: prod.")
+        self.r.tracer("--context", ctx)
+        (self.r.run_dir / "findings" / "net_usd.json").unlink()
+        self.r.log.unlink()
+        p = self.r.tracer()                                              # flag omitted: recorded context reused
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Execution context:", self.prompts("column-tracer-net_usd")[0])
+        p = self.r.tracer("--context", self.file("ctx2.txt", "Env: dev."))
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("context:", p.stderr)
+        p = self.r.tracer("--notes", self.file("n.md", "new"))           # a new input on resume also refuses
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("notes: none →", p.stderr)
+
+    def test_expected_columns_match(self):
+        p = self.r.tracer("--columns", self.file("c.json", '["ORDER_ID", "net_usd", "segment"]'))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rep = self.r.report()
+        self.assertEqual(rep["expected_columns"], {"provided": 3, "missing_from_manifest": [], "not_in_expected": [], "order_matches": True})
+        self.assertIn("Expected columns:", self.prompts("conductor")[0])
+        self.assertNotIn("Expected columns:", self.prompts("column-tracer-net_usd")[0])
+
+    def test_expected_columns_mismatch_blocks_completeness_without_inventing(self):
+        p = self.r.tracer("--columns", self.file("c.json", '["order_id", "segment", "net_usd", "region"]'))
+        self.assertEqual(p.returncode, 3)
+        rep = self.r.report()
+        self.assertFalse(rep["complete"])
+        self.assertEqual(rep["incomplete_reasons"]["expected_columns_mismatch"], 1)
+        self.assertEqual(rep["expected_columns"]["missing_from_manifest"], ["region"])
+        self.assertFalse(rep["expected_columns"]["order_matches"])
+        self.assertNotIn("region", {x["Target Column"] for x in self.r.csv("lineage.partial.csv")})
+        self.assertIn("(expected columns)", (self.r.run_dir / "gaps.md").read_text())
+
+    def test_bad_inputs_are_rejected(self):
+        self.assertEqual(self.r.tracer("--columns", self.file("c.json", '{"a": 1}')).returncode, 2)
+        self.assertEqual(self.r.tracer("--notes", "/nonexistent").returncode, 2)
+
+
 class TelemetryTests(unittest.TestCase):
     """Delivery 1.2: every call and stage is recorded; bin/metrics separates retry classes."""
 

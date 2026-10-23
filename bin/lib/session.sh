@@ -87,3 +87,12 @@ stage() {
   jq -nc --arg s "$1" --arg e "$2" --arg inv "${LINEAGE_INVOCATION:-0}" --argjson at "$(_now)" \
     '{invocation:$inv, stage:$s, event:$e, at:$at}' >> "$RUN_DIR/timeline.jsonl"
 }
+
+# inputs_prompt — the run inputs block appended to every agent prompt (empty when none were given)
+inputs_prompt() {
+  local d="${INPUTS_DIR:-$RUN_DIR/inputs}" out=""
+  [[ -f "$d/notes.md" ]]    && out+=$'\nRepo notes: '"$d/notes.md"' — navigation hints and declared assumptions from a human. Read them before searching; they say where to look, not what the code does. Never cite them as evidence.'
+  [[ -f "$d/context.txt" ]] && out+=$'\nExecution context: '"$d/context.txt"' — the job / environment / config selection this run traces under. Resolve bindings for this context; record others only if the context does not decide them.'
+  [[ -f "$d/columns.json" && "${1:-}" == "conductor" ]] && out+=$'\nExpected columns: '"$d/columns.json"' — an independent list of the target'"'"'s columns, for cross-checking your enumeration only. If it disagrees with what the code writes, re-read the build; if it still disagrees, enumerate what the code evidences, set enumeration_complete to false, and say what differs in notes. Never add a column, or a source for one, that the code does not evidence.'
+  printf '%s' "$out"
+}

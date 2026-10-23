@@ -2,6 +2,14 @@
 # tracer — produce a source-to-target mapping CSV for one table/view by reading the ETL repo.
 #
 #   tracer <schema.table> [--repo <git-url>] [--ref <sha|branch>] [--run <name>]
+#          [--notes <file>] [--context <file>] [--columns <file>]
+#
+#   --notes    navigation hints for this repo (where loaders/config live). Defaults to LINEAGE.md at the
+#              repo root when present. Hints and declared assumptions only — never evidence.
+#   --context  the execution context to trace under: job, environment, config selection, scope.
+#   --columns  JSON array of expected target column names, used only to cross-check enumeration.
+#   All three are copied into <run>/inputs/ and hashed into the run identity; omit them on resume
+#   to reuse what the run was started with.
 #
 # If --repo is omitted, $WORK/repo must already be mounted (docker -v /path/to/repo:/work/repo:ro).
 # Artifacts land in $WORK/.lineage/<run>/:
@@ -16,13 +24,17 @@
 #   attempts.jsonl, timeline.jsonl, metrics.json   per-call and per-stage telemetry (bin/metrics)
 set -euo pipefail
 
-TARGET="${1:?usage: tracer <schema.table> [--repo url] [--ref ref] [--run name]}"; shift
-REPO_URL=""; REF=""; RUN=""
+TARGET="${1:?usage: tracer <schema.table> [--repo url] [--ref ref] [--run name] [--notes f] [--context f] [--columns f]}"; shift
+REPO_URL=""; REF=""; RUN=""; NOTES=""; CONTEXT=""; COLUMNS=""
+abspath() { [[ -f "$1" ]] || { echo "$2: no such file: $1" >&2; exit 2; }; realpath "$1"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO_URL="$2"; shift 2;;
     --ref)  REF="$2"; shift 2;;
     --run)  RUN="$2"; shift 2;;
+    --notes)   NOTES=$(abspath "$2" --notes); shift 2;;
+    --context) CONTEXT=$(abspath "$2" --context); shift 2;;
+    --columns) COLUMNS=$(abspath "$2" --columns); shift 2;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -52,20 +64,50 @@ export CODE_URL_BASE="${LINEAGE_CODE_URL_BASE:-$WEB/blob/$SHA}"
 
 RUN="${RUN:-$(echo "$TARGET" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '_')-$(date -u +%Y%m%dT%H%M%SZ)}"
 export RUN_DIR=".lineage/$RUN" TARGET
-mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reviews" "$RUN_DIR/logs"
+mkdir -p "$RUN_DIR/findings" "$RUN_DIR/reviews" "$RUN_DIR/logs" "$RUN_DIR/inputs"
+
+# ---- run inputs: notes, context, expected columns ---------------------------------------------
+# A flag given now must match what a resumed run started with (the identity check refuses it
+# otherwise); a flag omitted on resume reuses the recorded file.
+RESUMING=false; [[ -f "$RUN_DIR/run.json" ]] && RESUMING=true
+stage_input() {  # <source-or-empty> <dest-name>
+  local src="$1" dst="$RUN_DIR/inputs/$2"
+  if [[ -n "$src" ]]; then
+    if $RESUMING && [[ -f "$dst" ]] && ! cmp -s "$src" "$dst"; then cp "$src" "$dst.offered"; return; fi
+    $RESUMING && [[ ! -f "$dst" ]] && { cp "$src" "$dst.offered"; return; }
+    cp "$src" "$dst"
+  fi
+}
+[[ -z "$NOTES" && -f repo/LINEAGE.md ]] && NOTES="$WORK/repo/LINEAGE.md"
+stage_input "$NOTES" notes.md
+stage_input "$CONTEXT" context.txt
+if [[ -n "$COLUMNS" ]]; then
+  jq -e 'type == "array" and length > 0 and all(type == "string")' "$COLUMNS" >/dev/null 2>&1 \
+    || { echo "--columns must be a non-empty JSON array of column names" >&2; exit 2; }
+  stage_input "$COLUMNS" columns.json
+fi
+input_hash() {  # hash of the offered file if one conflicts, else of the recorded file, else "none"
+  local f="$RUN_DIR/inputs/$1"
+  if [[ -f "$f.offered" ]]; then sha256sum < "$f.offered" | cut -c1-16; rm -f "$f.offered"
+  elif [[ -f "$f" ]]; then sha256sum < "$f" | cut -c1-16
+  else echo none; fi
+}
+NOTES_HASH=$(input_hash notes.md); CONTEXT_HASH=$(input_hash context.txt); COLUMNS_HASH=$(input_hash columns.json)
+export INPUTS_DIR="$RUN_DIR/inputs"
 
 # ---- run identity: what a run's findings are valid for ----------------------------------------
 # Resume reuses findings only when every component matches. The harness version covers the
 # agents, skills and schemas, so findings from an older prompt/contract are never mixed in.
 HARNESS_VERSION=$(cd "$LINEAGE_HOME" && find harness schemas -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16)
 IDENTITY=$(jq -nc --arg t "$TARGET" --arg r "$REMOTE" --arg s "$SHA" --arg c "$CODE_URL_BASE" --arg h "$HARNESS_VERSION" \
-  '{target:$t, repo:$r, sha:$s, code_url_base:$c, harness_version:$h}')
+  --arg n "$NOTES_HASH" --arg x "$CONTEXT_HASH" --arg k "$COLUMNS_HASH" \
+  '{target:$t, repo:$r, sha:$s, code_url_base:$c, harness_version:$h, notes:$n, context:$x, expected_columns:$k}')
 RUN_IDENTITY=$(echo -n "$IDENTITY" | sha256sum | cut -c1-16)
 if [[ -f "$RUN_DIR/run.json" ]]; then
   if ! jq -e '.identity' "$RUN_DIR/run.json" >/dev/null 2>&1; then
     echo "run $RUN predates run identity tracking; its findings cannot be trusted for resume — use a new --run" >&2; exit 2
   fi
-  DIFF=$(jq -r --argjson now "$IDENTITY" '.identity | to_entries[] | select(.value != $now[.key]) | "\(.key): \(.value) → \($now[.key])"' "$RUN_DIR/run.json")
+  DIFF=$(jq -r --argjson now "$IDENTITY" '($now | keys_unsorted[]) as $k | select(.identity[$k] != $now[$k]) | "\($k): \(.identity[$k] // "absent") → \($now[$k])"' "$RUN_DIR/run.json")
   if [[ -n "$DIFF" ]]; then
     echo "run $RUN was started for a different input and cannot be resumed — use a new --run. Changed:" >&2
     echo "$DIFF" | sed 's/^/  /' >&2; exit 2
@@ -86,7 +128,7 @@ if [[ ! -s "$RUN_DIR/manifest.json" ]]; then
   echo "[1/4] discover"
   PROMPT="Target: $TARGET
 Run directory: $RUN_DIR
-Produce the manifest for this target."
+Produce the manifest for this target.$(inputs_prompt conductor)"
   if [[ "$LINEAGE_FANOUT" == "subagent" ]]; then
     PROMPT+="
 Fan-out mode: subagent. After the manifest is written, dispatch column-tracer for every column and write each result to $RUN_DIR/findings/<column>.json before you finish."

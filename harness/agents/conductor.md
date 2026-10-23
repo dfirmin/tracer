@@ -13,6 +13,8 @@ The prompt gives you the target (`schema.table`) and the run directory. Read the
 
 ## Steps
 
+0. **Read the run inputs** named in the prompt, if any: repo notes, execution context, expected columns. Done when you know which paths the notes point to and which job/environment the context selects.
+
 1. **Locate every build site.** Follow `etl-discovery`. Done when you have read the code that writes the target and can cite each site with role and shape — and you have searched for a second site (a second loader, an incremental path, a view over a table) and either found it or can say why there is none.
 
 2. **Enumerate the columns, exhaustively and in order.** The target's own column order, from the final SELECT/INSERT list, DDL, or DataFrame schema. Done when the count matches what the build writes and every column cites the lines that define it. `SELECT *` is not an enumeration: expand it from the upstream object's definition and note that you did. Set `enumeration_complete` to false if any column could not be established — say which in `notes`.
