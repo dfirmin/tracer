@@ -1,0 +1,17 @@
+{
+  "name": "backfill_claim_fact",
+  "tasks": [
+    {
+      "task_key": "backfill",
+      "notebook_task": {
+        "notebook_path": "notebooks/generic_backfill",
+        "base_parameters": {
+          "source_table": "EDW.claim_fact_hist",
+          "target_table": "EDW.claim_fact",
+          "columns": "claim_id, policy_number, line_of_business, paid_amount, load_dt",
+          "cutoff_dt": "2024-01-01"
+        }
+      }
+    }
+  ]
+}

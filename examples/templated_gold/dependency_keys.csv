@@ -1,0 +1,7 @@
+Dependency Kind,Source Schema,Source Table,Source Column
+filter,RAW_CLAIMS,claim_adjustment,adj_status
+filter,RAW_CLAIMS,claim_line,status_cd
+filter,RAW_CLAIMS,policy,active_flag
+join,RAW_CLAIMS,claim_adjustment,claim_id
+join,RAW_CLAIMS,claim_line,claim_id
+join,RAW_CLAIMS,policy,policy_id

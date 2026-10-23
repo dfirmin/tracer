@@ -1,0 +1,204 @@
+{
+ "target_column": "line_of_business",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "EDW",
+   "table": "claim_fact",
+   "column": "line_of_business",
+   "scope": "EDW.claim_fact after nightly load (s2) or backfill (s4)",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 18,
+     "end_line": 18,
+     "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+    }
+   ]
+  },
+  {
+   "id": "p_src",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "lob_cd",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 18,
+     "end_line": 18,
+     "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "h_src",
+   "schema": "EDW",
+   "table": "claim_fact_hist",
+   "column": "line_of_business",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "backfill source; no writer in this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "\"source_table\": \"EDW.claim_fact_hist\""
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'EDW.claim_fact_hist' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_policy_id",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "policy_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_active",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "active_flag",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "p_src",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "UPPER(TRIM(p.lob_cd))",
+   "business_rule": "The policy's line-of-business code, trimmed and upper-cased.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 18,
+     "end_line": 18,
+     "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+    }
+   ]
+  },
+  {
+   "source_id": "h_src",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "EDW.claim_fact_hist.line_of_business (positional, columns widget)",
+   "business_rule": "Backfilled rows carry line_of_business from EDW.claim_fact_hist as is.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    }
+   ]
+  },
+  {
+   "source_id": "p_policy_id",
+   "target_id": "root",
+   "dependency_kind": "join",
+   "expression": "p.policy_id = l.policy_id",
+   "business_rule": "Only claims whose policy exists in RAW_CLAIMS.policy are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ]
+  },
+  {
+   "source_id": "p_active",
+   "target_id": "root",
+   "dependency_kind": "filter",
+   "expression": "p.active_flag = 'Y'",
+   "business_rule": "Only active policies are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "p_src",
+   "mapping_rule": "UPPER(TRIM(RAW_CLAIMS.policy.lob_cd)) → line_of_business; joined on policy_id, active policies only",
+   "mapping_business_rule": "The policy's line-of-business code, trimmed and upper-cased.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 18,
+     "end_line": 18,
+     "quote": "UPPER(TRIM(p.lob_cd)) AS line_of_business"
+    }
+   ]
+  },
+  {
+   "source_id": "h_src",
+   "mapping_rule": "EDW.claim_fact_hist.line_of_business → line_of_business for rows with load_dt < 2024-01-01 (backfill)",
+   "mapping_business_rule": "Historical rows keep their archived line_of_business.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    }
+   ]
+  }
+ ]
+}

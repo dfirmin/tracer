@@ -458,6 +458,87 @@ class TelemetryTests(unittest.TestCase):
         self.assertEqual(m["stages"]["trace"]["calls"], 4)
 
 
+GOLD = ROOT / "examples" / "templated_gold"
+
+
+class TemplatedFixtureTests(unittest.TestCase):
+    """Delivery 1.5: the templated fixture (EDW.claim_fact) — names only in config/job JSON, four writers
+    across BTEQ / PySpark / Databricks SQL, a partial MERGE, a generic backfill. The gold responses play
+    the model; the point is that the harness carries this shape end to end and bin/compare scores it."""
+
+    def setUp(self):
+        self.r = Run(env={"FAKE_RESPONSES": str(GOLD / "responses")})
+        self.addCleanup(self.r.close)
+        self.r.run_name = "claims"
+
+    def run_fixture(self, *args):
+        return self.r.tracer("--context", str(GOLD / "context.txt"), *args, target="EDW.claim_fact")
+
+    def prompt(self, key):
+        return [json.loads(l)["prompt"] for l in self.r.log.read_text().splitlines() if json.loads(l)["key"] == key][0]
+
+    def compare(self):
+        p = subprocess.run([str(ROOT / "bin" / "compare"), str(self.r.run_dir), str(GOLD)], capture_output=True, text=True)
+        return p.returncode, p.stdout, json.loads((self.r.run_dir / "compare.json").read_text())
+
+    def test_gold_run_is_complete_and_matches_gold(self):
+        p = self.run_fixture()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        rep = self.r.report()
+        self.assertTrue(rep["complete"])
+        self.assertEqual([c["column"] for c in rep["columns"]], ["claim_id", "policy_number", "line_of_business", "paid_amount", "load_dt"])
+        rc, out, res = self.compare()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((res["lineage"]["matched"], res["lineage"]["expected"]), (11, 11))
+        self.assertEqual(res["dependencies"]["recall"], 1.0)
+        self.assertIn("lineage 11/11", out)
+        self.assertEqual(len(list((self.r.run_dir / "excerpts").glob("*.txt"))), 4)
+
+    def test_paid_amount_prompt_has_all_three_writers_in_order(self):
+        self.run_fixture()
+        pr = self.prompt("column-tracer-paid_amount")
+        self.assertIn("Assigned by 3 statement(s), in execution order:", pr)
+        order = [pr.index(f"[{s}]") for s in ("s2_load_claim_fact", "s3_apply_adjustments", "s4_generic_backfill")]
+        self.assertEqual(order, sorted(order))                                # unordered backfill goes last
+        self.assertIn("UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount", pr)
+        self.assertIn("WHERE p.active_flag = 'Y'", pr)
+        self.assertIn("STG.claim_line_stg (physical)", pr)                    # templated read matched by table name
+        self.assertIn("written by [s1_stage_claim_lines]", pr)
+        self.assertIn("{cfg['stg_schema']} → STG (prod)", pr)
+        self.assertIn("{dst} → EDW.claim_fact", pr)
+        self.assertIn("Execution context:", pr)
+
+    def test_policy_number_prompt_omits_unrelated_statement(self):
+        self.run_fixture()
+        pr = self.prompt("column-tracer-policy_number")
+        self.assertIn("Assigned by 2 statement(s)", pr)
+        self.assertNotIn("MERGE INTO", pr)
+        self.assertNotIn("RAW_CLAIMS.claim_adjustment", pr)
+
+    def test_compare_scores_a_degraded_run(self):
+        self.run_fixture()
+        path = self.r.run_dir / "lineage.csv"
+        rows = self.r.csv()
+        kept = [x for x in rows if not (x["Target Column"] == "paid_amount" and x["Source Table"] == "claim_adjustment")]
+        kept.append(dict(rows[0], **{"Source Table": "claim_header"}))        # a wrong source for claim_id
+        with path.open("w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0])); w.writeheader(); w.writerows(kept)
+        rc, out, res = self.compare()
+        self.assertEqual(rc, 4)
+        self.assertEqual(res["lineage"]["matched"], 10)
+        self.assertEqual(res["lineage"]["recall"], round(10 / 11, 4))
+        self.assertEqual(res["lineage"]["precision"], round(10 / 11, 4))
+        self.assertEqual(res["columns"]["paid_amount"]["missing"], ["raw_claims.claim_adjustment.adj_amount"])
+        self.assertEqual(res["columns"]["claim_id"]["extra"], ["raw_claims.claim_header.claim_id"])
+
+    def test_wrong_column_list_is_caught_by_expected_columns(self):
+        cols = self.r.tmp / "cols.json"
+        cols.write_text('["claim_id", "policy_number", "line_of_business", "paid_amount", "load_dt", "reserve_amount"]')
+        p = self.run_fixture("--columns", str(cols))
+        self.assertEqual(p.returncode, 3)
+        self.assertEqual(self.r.report()["expected_columns"]["missing_from_manifest"], ["reserve_amount"])
+
+
 class CheckTests(unittest.TestCase):
     """The validator on its own: entailment and graph invariants."""
 

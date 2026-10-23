@@ -1,0 +1,4 @@
+# Schema names per environment. Notebooks load conf/env/<env>.yaml; jobs pass env.
+edw_schema: EDW_DEV
+stg_schema: STG_DEV
+raw_schema: RAW_CLAIMS_DEV

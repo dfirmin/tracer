@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""compare <run_dir> <gold_dir> — score a run's lineage against a gold key set.
+
+    gold_dir/lineage_keys.csv     Target Column, Source Schema, Source Table, Source Column, Source Type
+    gold_dir/dependency_keys.csv  Dependency Kind, Source Schema, Source Table, Source Column   (optional)
+
+Compares on those keys only — case-insensitive, no paths, no mapping-rule text — so a run is judged
+on which sources it found, not on how it worded them. Reads lineage.csv, or lineage.partial.csv when
+the run was partial (a partial run can still be scored). Writes <run_dir>/compare.json and prints
+per-column misses. Exit 0 when lineage keys match exactly, 4 when they don't, 2 on bad input.
+"""
+import csv, json, sys
+from collections import defaultdict
+from pathlib import Path
+
+LKEY = ["Target Column", "Source Schema", "Source Table", "Source Column", "Source Type"]
+DKEY = ["Dependency Kind", "Source Schema", "Source Table", "Source Column"]
+
+
+def rows(path, cols):
+    with path.open(newline="", encoding="utf-8") as fh:
+        return {tuple((r.get(c) or "").strip().casefold() for c in cols) for r in csv.DictReader(fh)}
+
+
+def score(got, want):
+    tp = len(got & want)
+    return {"expected": len(want), "found": len(got), "matched": tp,
+            "precision": round(tp / len(got), 4) if got else (1.0 if not want else 0.0),
+            "recall": round(tp / len(want), 4) if want else 1.0,
+            "missing": sorted(want - got), "extra": sorted(got - want)}
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(__doc__, file=sys.stderr); return 2
+    run, gold = Path(sys.argv[1]), Path(sys.argv[2])
+    mapping = next((run / n for n in ("lineage.csv", "lineage.partial.csv") if (run / n).exists()), None)
+    if mapping is None or not (gold / "lineage_keys.csv").exists():
+        print("compare: need <run>/lineage[.partial].csv and <gold>/lineage_keys.csv", file=sys.stderr); return 2
+    got, want = rows(mapping, LKEY), rows(gold / "lineage_keys.csv", LKEY)
+    # an unresolved row is a gap, not a claimed source
+    got = {k for k in got if k[4] != "unresolved"}
+    result = {"mapping_file": mapping.name, "lineage": score(got, want)}
+
+    per_col = defaultdict(lambda: {"missing": [], "extra": []})
+    for k in result["lineage"]["missing"]:
+        per_col[k[0]]["missing"].append(".".join(x for x in k[1:4] if x) or k[4])
+    for k in result["lineage"]["extra"]:
+        per_col[k[0]]["extra"].append(".".join(x for x in k[1:4] if x) or k[4])
+    result["columns"] = dict(sorted(per_col.items()))
+
+    if (gold / "dependency_keys.csv").exists() and (run / "dependencies.csv").exists():
+        result["dependencies"] = score(rows(run / "dependencies.csv", DKEY), rows(gold / "dependency_keys.csv", DKEY))
+
+    for k in ("lineage", "dependencies"):
+        if k in result:
+            result[k]["missing"] = [list(x) for x in result[k]["missing"]]
+            result[k]["extra"] = [list(x) for x in result[k]["extra"]]
+    (run / "compare.json").write_text(json.dumps(result, indent=2) + "\n")
+
+    L = result["lineage"]
+    line = f"compare: lineage {L['matched']}/{L['expected']} (precision {L['precision']:.2f}, recall {L['recall']:.2f})"
+    if "dependencies" in result:
+        D = result["dependencies"]
+        line += f"; dependencies {D['matched']}/{D['expected']} (precision {D['precision']:.2f}, recall {D['recall']:.2f})"
+    print(line + f" — {mapping.name}")
+    for col, d in result["columns"].items():
+        print(f"  {col}: " + "; ".join(x for x in (d["missing"] and "missing " + ", ".join(d["missing"]),
+                                                   d["extra"] and "extra " + ", ".join(d["extra"])) if x))
+    return 0 if not L["missing"] and not L["extra"] else 4
+
+
+if __name__ == "__main__":
+    sys.exit(main())

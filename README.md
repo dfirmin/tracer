@@ -94,6 +94,9 @@ schemas/                    manifest, finding, review JSON Schema (the --json-sc
 bin/                        tracer, trace-one, review-one, lib/session.sh, check, excerpt, budget, assemble.py, metrics
 tests/                      fake claude + unit/pipeline tests   (python3 -m unittest discover -s tests -v)
 examples/etl/               two-file Teradata fixture (mart.daily_sales) used by the tests and the first live smoke test
+examples/templated/         templated mixed-shape fixture (EDW.claim_fact): config/job-driven names, BTEQ + PySpark + Databricks SQL, MERGE, generic backfill
+examples/templated_gold/    its expected lineage/dependency keys, kept outside the fixture; make_gold.py regenerates the test responses
+bin/compare                 score a run against gold keys (precision/recall per column)
 docs/evaluation.md          the three gates before trusting output
 ```
 

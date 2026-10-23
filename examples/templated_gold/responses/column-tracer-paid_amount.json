@@ -1,0 +1,525 @@
+{
+ "target_column": "paid_amount",
+ "root_id": "root",
+ "confidence": "high",
+ "unresolved": [],
+ "nodes": [
+  {
+   "id": "root",
+   "schema": "EDW",
+   "table": "claim_fact",
+   "column": "paid_amount",
+   "scope": "EDW.claim_fact after apply_adjustments MERGE (s3)",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  },
+  {
+   "id": "prior",
+   "schema": "EDW",
+   "table": "claim_fact",
+   "column": "paid_amount",
+   "scope": "EDW.claim_fact before the MERGE: nightly load (s2) or backfill (s4)",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 19,
+     "end_line": 19,
+     "quote": "l.line_amount AS paid_amount"
+    }
+   ]
+  },
+  {
+   "id": "stg_amt",
+   "schema": "STG",
+   "table": "claim_line_stg",
+   "column": "line_amount",
+   "scope": "s1 nightly staging",
+   "source_type": "physical",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SUM(cl.line_amt),"
+    }
+   ]
+  },
+  {
+   "id": "cl_amt",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_line",
+   "column": "line_amt",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SUM(cl.line_amt),"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_line' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "h_paid",
+   "schema": "EDW",
+   "table": "claim_fact_hist",
+   "column": "paid_amount",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "backfill source; no writer in this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/jobs/backfill_claim_fact.json",
+     "start_line": 9,
+     "end_line": 9,
+     "quote": "\"source_table\": \"EDW.claim_fact_hist\""
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'EDW.claim_fact_hist' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "adj",
+   "schema": "",
+   "table": "a",
+   "column": "adj_amount",
+   "scope": "MERGE USING subquery a",
+   "source_type": "cte",
+   "terminal": "expanded",
+   "boundary_reason": "",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "SELECT claim_id, SUM(adj_amount) AS adj_amount"
+    }
+   ]
+  },
+  {
+   "id": "adj_amt",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_adjustment",
+   "column": "adj_amount",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "SELECT claim_id, SUM(adj_amount) AS adj_amount"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_adjustment' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "adj_status",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_adjustment",
+   "column": "adj_status",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 7,
+     "end_line": 7,
+     "quote": "WHERE adj_status = 'APPROVED'"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_adjustment' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "adj_claim_id",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_adjustment",
+   "column": "claim_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "ON t.claim_id = a.claim_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_adjustment' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_policy_id",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "policy_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "p_active",
+   "schema": "RAW_CLAIMS",
+   "table": "policy",
+   "column": "active_flag",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.policy' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "cl_status",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_line",
+   "column": "status_cd",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 13,
+     "end_line": 13,
+     "quote": "WHERE cl.status_cd <> 'V'"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_line' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  },
+  {
+   "id": "cl_claim_id",
+   "schema": "RAW_CLAIMS",
+   "table": "claim_line",
+   "column": "claim_id",
+   "scope": "",
+   "source_type": "physical",
+   "terminal": "repo_boundary",
+   "boundary_reason": "read only; populated outside this repo",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 12,
+     "end_line": 12,
+     "quote": "ON cl.claim_id = c.claim_id"
+    }
+   ],
+   "search_notes": [
+    "rg -n -i 'RAW_CLAIMS.claim_line' repo/ — read sites only",
+    "no INSERT/MERGE/CREATE/saveAsTable writes it in the repo"
+   ]
+  }
+ ],
+ "edges": [
+  {
+   "source_id": "prior",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "t.paid_amount",
+   "business_rule": "The loaded amount is the starting value.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "adj",
+   "target_id": "root",
+   "dependency_kind": "value",
+   "expression": "+ a.adj_amount",
+   "business_rule": "Approved adjustments are added on matching claims.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "adj_claim_id",
+   "target_id": "root",
+   "dependency_kind": "join",
+   "expression": "t.claim_id = a.claim_id",
+   "business_rule": "Adjustments apply only to claims already in claim_fact.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 10,
+     "end_line": 10,
+     "quote": "ON t.claim_id = a.claim_id"
+    }
+   ]
+  },
+  {
+   "source_id": "stg_amt",
+   "target_id": "prior",
+   "dependency_kind": "value",
+   "expression": "l.line_amount",
+   "business_rule": "Nightly load takes the staged claim total.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 19,
+     "end_line": 19,
+     "quote": "l.line_amount AS paid_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "h_paid",
+   "target_id": "prior",
+   "dependency_kind": "value",
+   "expression": "EDW.claim_fact_hist.paid_amount (positional, columns widget)",
+   "business_rule": "Backfilled rows carry paid_amount from EDW.claim_fact_hist as is.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    }
+   ]
+  },
+  {
+   "source_id": "cl_amt",
+   "target_id": "stg_amt",
+   "dependency_kind": "value",
+   "expression": "SUM(cl.line_amt)",
+   "business_rule": "Staging sums non-void line amounts per claim.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SUM(cl.line_amt),"
+    }
+   ]
+  },
+  {
+   "source_id": "adj_amt",
+   "target_id": "adj",
+   "dependency_kind": "value",
+   "expression": "SUM(adj_amount)",
+   "business_rule": "Adjustments are summed per claim.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "SELECT claim_id, SUM(adj_amount) AS adj_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "adj_status",
+   "target_id": "adj",
+   "dependency_kind": "filter",
+   "expression": "adj_status = 'APPROVED'",
+   "business_rule": "Only approved adjustments count.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 7,
+     "end_line": 7,
+     "quote": "WHERE adj_status = 'APPROVED'"
+    }
+   ]
+  },
+  {
+   "source_id": "p_policy_id",
+   "target_id": "prior",
+   "dependency_kind": "join",
+   "expression": "p.policy_id = l.policy_id",
+   "business_rule": "Only claims whose policy exists in RAW_CLAIMS.policy are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 23,
+     "end_line": 23,
+     "quote": "ON p.policy_id = l.policy_id"
+    }
+   ]
+  },
+  {
+   "source_id": "p_active",
+   "target_id": "prior",
+   "dependency_kind": "filter",
+   "expression": "p.active_flag = 'Y'",
+   "business_rule": "Only active policies are loaded.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 24,
+     "end_line": 24,
+     "quote": "WHERE p.active_flag = 'Y'"
+    }
+   ]
+  },
+  {
+   "source_id": "cl_status",
+   "target_id": "stg_amt",
+   "dependency_kind": "filter",
+   "expression": "cl.status_cd <> 'V'",
+   "business_rule": "Voided claim lines are excluded from staging.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 13,
+     "end_line": 13,
+     "quote": "WHERE cl.status_cd <> 'V'"
+    }
+   ]
+  },
+  {
+   "source_id": "cl_claim_id",
+   "target_id": "stg_amt",
+   "dependency_kind": "join",
+   "expression": "cl.claim_id = c.claim_id",
+   "business_rule": "Claims are staged with their lines.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 12,
+     "end_line": 12,
+     "quote": "ON cl.claim_id = c.claim_id"
+    }
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "source_id": "cl_amt",
+   "mapping_rule": "SUM(RAW_CLAIMS.claim_line.line_amt) per claim, status_cd <> 'V' → STG.claim_line_stg.line_amount → paid_amount (active policies), then + approved adjustments",
+   "mapping_business_rule": "Total of the claim's non-void line amounts, plus approved adjustments.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/bteq/stage_claim_lines.bteq",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SUM(cl.line_amt),"
+    },
+    {
+     "path": "repo/examples/templated/notebooks/load_claim_fact.py",
+     "start_line": 19,
+     "end_line": 19,
+     "quote": "l.line_amount AS paid_amount"
+    },
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "h_paid",
+   "mapping_rule": "EDW.claim_fact_hist.paid_amount → paid_amount for backfilled rows, then + approved adjustments",
+   "mapping_business_rule": "Archived paid amount for historical claims, plus approved adjustments.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/generic_backfill.py",
+     "start_line": 8,
+     "end_line": 8,
+     "quote": "SELECT {cols} FROM {src}"
+    },
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  },
+  {
+   "source_id": "adj_amt",
+   "mapping_rule": "paid_amount + SUM(RAW_CLAIMS.claim_adjustment.adj_amount) WHERE adj_status = 'APPROVED', matched on claim_id",
+   "mapping_business_rule": "Approved adjustments are added to the paid amount.",
+   "evidence": [
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 5,
+     "end_line": 5,
+     "quote": "SELECT claim_id, SUM(adj_amount) AS adj_amount"
+    },
+    {
+     "path": "repo/examples/templated/notebooks/apply_adjustments.sql",
+     "start_line": 11,
+     "end_line": 11,
+     "quote": "UPDATE SET t.paid_amount = t.paid_amount + a.adj_amount"
+    }
+   ]
+  }
+ ]
+}
