@@ -301,6 +301,78 @@ class CompletenessAndResumeTests(unittest.TestCase):
         self.assertIn("new --run", p.stderr)
 
 
+class TelemetryTests(unittest.TestCase):
+    """Delivery 1.2: every call and stage is recorded; bin/metrics separates retry classes."""
+
+    def setUp(self):
+        self.r = Run(env={"LINEAGE_BACKOFF_BASE": "0.01"})
+        self.addCleanup(self.r.close)
+
+    def attempts(self):
+        return [json.loads(l) for l in (self.r.run_dir / "attempts.jsonl").read_text().splitlines()]
+
+    def metrics(self):
+        return json.loads((self.r.run_dir / "metrics.json").read_text())
+
+    def test_clean_run_records_every_call_and_stage(self):
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        a = self.attempts()
+        self.assertEqual(len(a), 4)                                      # conductor + 3 tracers
+        self.assertTrue(all(x["outcome"] == "ok" and x["class"] == "first" for x in a))
+        self.assertTrue(all(x["num_turns"] == 3 and x["output_tokens"] == 400 for x in a))
+        m = self.metrics()
+        self.assertEqual(m["sessions"], 4)
+        self.assertEqual(m["turns"]["total"], 12)
+        self.assertEqual(m["retries"], {"transient": 0, "structural": 0, "semantic": 0})
+        self.assertEqual(m["columns"], {"total": 3, "resolved": 3})
+        self.assertAlmostEqual(m["cost_per_resolved_column_usd"], round(0.2 / 3, 4))
+        for s in ("run", "discover", "trace", "review", "assemble"):
+            self.assertIsNotNone(m["wall_clock_s"][s], s)
+        self.assertEqual(set(m["stages"]), {"discover", "trace"})
+        self.assertIn("metrics:", p.stdout)
+
+    def test_rate_limit_is_transient_and_does_not_use_an_attempt(self):
+        self.r.env.update(FAKE_TRANSIENT_ONCE="column-tracer-net_usd", LINEAGE_ATTEMPTS="1")
+        p = self.r.tracer()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)            # one attempt allowed, still succeeded
+        net = [x for x in self.attempts() if x["label"] == "trace-net_usd"]
+        self.assertEqual([(x["outcome"], x["class"]) for x in net], [("transient_failure", "first"), ("ok", "transient")])
+        self.assertEqual(net[0]["rate_limit_hits"], 1)
+        self.assertIn("429", (self.r.run_dir / "logs" / "trace-net_usd.1.stderr").read_text())
+        m = self.metrics()
+        self.assertEqual(m["retries"]["transient"], 1)
+        self.assertEqual(m["retries"]["structural"], 0)
+        self.assertEqual(m["rate_limit_hits"], 1)
+
+    def test_bad_citation_counts_as_structural_retry(self):
+        self.r.env["FAKE_FAIL_ONCE"] = "column-tracer-net_usd"
+        self.r.tracer()
+        net = [x for x in self.attempts() if x["label"] == "trace-net_usd"]
+        self.assertEqual([(x["outcome"], x["class"]) for x in net], [("rejected", "first"), ("ok", "structural")])
+        self.assertEqual(self.metrics()["retries"]["structural"], 1)
+
+    def test_review_repair_counts_as_semantic(self):
+        r = Run(review="all")
+        self.addCleanup(r.close)
+        r.responses(**{"lineage-reviewer-segment": dict(accepted=False, issues=["repo/examples/etl/02_target.sql: x"])})
+        r.tracer()
+        m = json.loads((r.run_dir / "metrics.json").read_text())
+        self.assertEqual(m["retries"]["semantic"], 1)
+        self.assertEqual(set(m["stages"]), {"discover", "trace", "review", "repair"})
+        self.assertEqual(m["stages"]["review"]["sessions"], 4)          # 3 reviews + 1 re-review of segment
+        self.assertEqual(m["columns"]["resolved"], 2)
+
+    def test_resume_is_a_second_invocation(self):
+        self.r.tracer()
+        (self.r.run_dir / "findings" / "net_usd.json").unlink()
+        self.r.tracer()
+        m = self.metrics()
+        self.assertEqual(m["invocations"], 2)
+        self.assertEqual(m["stages"]["trace"]["sessions"], 3)            # net_usd's label was reused
+        self.assertEqual(m["stages"]["trace"]["calls"], 4)
+
+
 class CheckTests(unittest.TestCase):
     """The validator on its own: entailment and graph invariants."""
 

@@ -28,6 +28,7 @@ Output in `out/<run>/`:
 | `report.json` | `complete`, per-reason counts for why not (`incomplete_reasons`), per-column status, confidence, review outcome, spend |
 | `manifest.json`, `findings/*.json`, `reviews/*.json` | the agents' validated outputs; `findings/` are full graphs with scope and evidence |
 | `budget.json`, `logs/` | spend ledger; raw session envelopes, stderr, and `*.problems` (what the validator rejected) |
+| `metrics.json`, `attempts.jsonl`, `timeline.jsonl` | telemetry: one line per `claude` call (outcome, retry class, turns, tokens, cost, 429s) and per stage start/end; `metrics.json` summarises wall clock per stage, sessions, turns p50/p95, tokens, retries by class, and cost per resolved column |
 
 Exit codes: `0` complete, `3` partial, `1` discovery failed, `2` bad input or a resume that doesn't match the run. A run is complete only when the conductor confirmed the column list (`enumeration_complete`) and no column is missing, failed, unresolved, low-confidence, or — when `LINEAGE_REVIEW` selects it — lacks an accepted review of its current version.
 
@@ -39,7 +40,10 @@ Exit codes: `0` complete, `3` partial, `1` discovery failed, `2` bad input or a 
 | `LINEAGE_REVIEW` | `low` | `none`; `low` = review findings with confidence below high or any unresolved; `all` |
 | `LINEAGE_CALL_BUDGET` / `LINEAGE_RUN_BUDGET` | `2` / `100` | USD per session (`--max-budget-usd`; conductor gets 4×) and a run ceiling enforced by a flock'd ledger |
 | `LINEAGE_ATTEMPTS` / `LINEAGE_MAX_TURNS` / `LINEAGE_TIMEOUT` | `2` / `60` / `900` | per session |
+| `LINEAGE_TRANSIENT_RETRIES` / `LINEAGE_BACKOFF_BASE` | `3` / `5` | gateway/API failures (429, 5xx, overload, timeout) are retried this many times with jittered exponential backoff from this many seconds, without using up an attempt |
 | `LINEAGE_CODE_URL_BASE` | from `origin` + HEAD | override for GHES or non-GitHub hosts |
+
+Retries come in three kinds, counted separately in `metrics.json`: **transient** (the call failed — retried after backoff with the same prompt), **structural** (no answer, or `bin/check` rejected it — retried with the exact problems as feedback), and **semantic** (a reviewer rejected a valid finding — one repair session).
 
 Re-running with `--run <same name>` skips the manifest, every column with a validated finding, and every review that still matches its finding. Failed columns (`findings/<col>.failed.json`) are retried, stale reviews are redone, and a finding that was never reviewed gets one without being re-traced. It refuses to resume if the target, repo, commit, code-URL base, or harness version differ from what the run was started with (`run.json`), naming what changed.
 

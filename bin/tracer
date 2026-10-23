@@ -13,6 +13,7 @@
 #   lineage.csv          the deliverable (lineage.partial.csv when any column has a gap)
 #   dependencies.csv     join/filter/group/window/order/control inputs, deduplicated per target table
 #   gaps.md, report.json, budget.json, logs/
+#   attempts.jsonl, timeline.jsonl, metrics.json   per-call and per-stage telemetry (bin/metrics)
 set -euo pipefail
 
 TARGET="${1:?usage: tracer <schema.table> [--repo url] [--ref ref] [--run name]}"; shift
@@ -76,8 +77,11 @@ fi
 # review policy is per invocation, not part of identity: a resumed run may add reviews.
 jq --arg v "$LINEAGE_REVIEW" '.review = $v' "$RUN_DIR/run.json" > "$RUN_DIR/run.json.tmp" && mv "$RUN_DIR/run.json.tmp" "$RUN_DIR/run.json"
 echo "run: $RUN_DIR  target: $TARGET  sha: $SHA  identity: $RUN_IDENTITY  fanout: $LINEAGE_FANOUT  review: $LINEAGE_REVIEW"
+export LINEAGE_INVOCATION="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+stage run start
 
 # ---- 1. discover (conductor) ----------------------------------------------------------------
+stage discover start
 if [[ ! -s "$RUN_DIR/manifest.json" ]]; then
   echo "[1/4] discover"
   PROMPT="Target: $TARGET
@@ -89,29 +93,38 @@ Fan-out mode: subagent. After the manifest is written, dispatch column-tracer fo
   fi
   LINEAGE_MAX_TURNS=$((LINEAGE_MAX_TURNS * 3)) LINEAGE_CALL_BUDGET=$(python3 -c "print($LINEAGE_CALL_BUDGET*4)") \
     run_session discover conductor "$LINEAGE_CONDUCTOR_MODEL" "$SCHEMAS/manifest.schema.json" manifest "" "$PROMPT" "$RUN_DIR/manifest.json" \
-    || { echo "conductor produced no valid manifest; see $RUN_DIR/logs/discover.*" >&2; exit 1; }
+    || { stage discover end; echo "conductor produced no valid manifest; see $RUN_DIR/logs/discover.*" >&2; exit 1; }
 fi
+stage discover end
 N=$(jq '.columns | length' "$RUN_DIR/manifest.json")
 echo "manifest: $N columns, enumeration_complete=$(jq -r .enumeration_complete "$RUN_DIR/manifest.json"), build site(s): $(jq -r '[.build_sites[].evidence[0].path] | unique | join(", ")' "$RUN_DIR/manifest.json")"
 
 # ---- 2. trace (one tracer per column) -------------------------------------------------------
+stage trace start
 if [[ "$LINEAGE_FANOUT" == "process" ]]; then
   echo "[2/4] trace ($LINEAGE_CONCURRENCY parallel)"
   jq -r '.columns[].name' "$RUN_DIR/manifest.json" | xargs -P "$LINEAGE_CONCURRENCY" -I{} "$LINEAGE_HOME/bin/trace-one" "{}"
 else
   echo "[2/4] trace: done in-session by conductor"
 fi
+stage trace end
 
 # ---- 3. review (optional, sampled) ----------------------------------------------------------
+stage review start
 if [[ "$LINEAGE_REVIEW" != "none" ]]; then
   echo "[3/4] review ($LINEAGE_REVIEW)"
   jq -r '.columns[].name' "$RUN_DIR/manifest.json" | xargs -P "$LINEAGE_CONCURRENCY" -I{} "$LINEAGE_HOME/bin/review-one" "{}"
 else
   echo "[3/4] review: skipped"
 fi
+stage review end
 
 # ---- 4. assemble ----------------------------------------------------------------------------
 echo "[4/4] assemble"
+stage assemble start
 python3 "$LINEAGE_HOME/bin/assemble.py" "$RUN_DIR"
+stage assemble end
+stage run end
+python3 "$LINEAGE_HOME/bin/metrics" "$RUN_DIR" || echo "metrics: failed (run outputs are unaffected)" >&2
 echo "spend: \$$("$LINEAGE_HOME/bin/budget" total)  → $RUN_DIR/$(jq -r .mapping_file "$RUN_DIR/report.json")"
 jq -e .complete "$RUN_DIR/report.json" >/dev/null || exit 3
